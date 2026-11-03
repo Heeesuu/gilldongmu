@@ -1,0 +1,21 @@
+*.iml
+.gradle/
+.kotlin/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/app/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+# 공모전 제출용 release APK는 apk/ 폴더에 올린다.
+!/apk/*.apk
+
+# 서버
+/server/*.db
+/server/bin/
+.env
+.env.*
