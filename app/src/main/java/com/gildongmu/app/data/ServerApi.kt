@@ -3,10 +3,12 @@ package com.gildongmu.app.data
 import android.os.Handler
 import android.os.Looper
 import org.json.JSONObject
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.Executors
 
 /**
@@ -37,6 +39,46 @@ class ServerApi(
         parseNearby(JSONObject(request("GET", "messages/nearby?$params").decodeToString()))
     }
 
+    /** 녹음 파일(OGG/Opus)과 녹음 시작 때의 위치·방향을 올린다. 검수는 서버가 따로 하므로 씨앗으로 돌아온다. */
+    fun upload(audio: File, meta: UploadMeta, callback: (Result<UploadResult>) -> Unit) = run(callback) {
+        val metaJson = JSONObject()
+            .put("recorded_at", meta.recordedAt)
+            .put("lat", meta.lat)
+            .put("lon", meta.lon)
+            .put("heading", meta.heading)
+            .put("speed_kmh", meta.speedKmh)
+            .put("duration_ms", meta.durationMs)
+        // 모르면 보내지 않는다 (docs/api.md 3.2).
+        meta.wiperOn?.let { metaJson.put("wiper_on", it) }
+        meta.headlightOn?.let { metaJson.put("headlight_on", it) }
+
+        val boundary = "gildongmu-${UUID.randomUUID()}"
+        val body = Multipart.body(
+            boundary,
+            fields = listOf("meta" to metaJson.toString()),
+            file = Multipart.FilePart("audio", audio.name, AUDIO_MIME, audio.readBytes()),
+        )
+        val json = JSONObject(request("POST", "messages", body, Multipart.contentType(boundary)).decodeToString())
+        UploadResult(id = json.getString("id"), stage = Stage.of(json.getString("stage")))
+    }
+
+    fun myMessages(callback: (Result<List<MyMessage>>) -> Unit) = run(callback) {
+        val items = JSONObject(request("GET", "me/messages").decodeToString()).optJSONArray("messages")
+        (0 until (items?.length() ?: 0)).map { i ->
+            val m = items!!.getJSONObject(i)
+            MyMessage(
+                id = m.getString("id"),
+                stage = Stage.of(m.getString("stage")),
+                kind = Kind.of(m.optString("kind")),
+                review = Review.of(m.getString("review")),
+                durationMs = m.getInt("duration_ms"),
+                listenCount = m.getInt("listen_count"),
+                thanksCount = m.getInt("thanks_count"),
+                createdAt = m.getString("created_at"),
+            )
+        }
+    }
+
     /** `audioUrl`은 nearby 응답의 `audio_url`(예: `/v1/messages/{id}/audio`)이다. */
     fun audio(audioUrl: String, callback: (Result<ByteArray>) -> Unit) = run(callback) {
         request("GET", audioUrl)
@@ -53,7 +95,7 @@ class ServerApi(
 
     fun listen(id: String, result: ListenResult, playedMs: Long, callback: (Result<Unit>) -> Unit) = run(callback) {
         val body = JSONObject().put("result", result.wire).put("played_ms", playedMs)
-        request("POST", "messages/$id/listen", body)
+        request("POST", "messages/$id/listen", body.toString().toByteArray(), "application/json")
         Unit
     }
 
@@ -72,7 +114,7 @@ class ServerApi(
      * `path`가 `messages/...`처럼 상대 경로면 `baseUrl`(…/v1) 아래로,
      * `/v1/...`처럼 `/`로 시작하면 서버 주소 바로 아래로 붙는다.
      */
-    private fun request(method: String, path: String, body: JSONObject? = null): ByteArray {
+    private fun request(method: String, path: String, body: ByteArray? = null, contentType: String? = null): ByteArray {
         val url = URL(URL("$baseUrl/"), path)
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = method
@@ -84,9 +126,11 @@ class ServerApi(
         try {
             if (method == "POST") {
                 // 본문이 없는 POST도 Content-Length: 0을 보내도록 비어 있는 본문을 쓴다.
+                val bytes = body ?: ByteArray(0)
                 connection.doOutput = true
-                if (body != null) connection.setRequestProperty("Content-Type", "application/json")
-                connection.outputStream.use { it.write(body?.toString()?.toByteArray() ?: ByteArray(0)) }
+                connection.setFixedLengthStreamingMode(bytes.size)
+                if (contentType != null) connection.setRequestProperty("Content-Type", contentType)
+                connection.outputStream.use { it.write(bytes) }
             }
             val status = connection.responseCode
             val ok = status in 200..299
@@ -130,5 +174,9 @@ class ServerApi(
             messages = messages,
             nextPollSec = json.optInt("next_poll_sec", 10),
         )
+    }
+
+    companion object {
+        private const val AUDIO_MIME = "audio/ogg"
     }
 }
