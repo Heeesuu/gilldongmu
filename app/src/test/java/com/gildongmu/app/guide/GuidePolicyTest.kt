@@ -43,6 +43,13 @@ class GuidePolicyTest {
     }
 
     @Test
+    fun `방향을 모르는 한마디는 반대 방향에서 다가와도 남긴다`() {
+        val unknown = message.copy(heading = null)
+        assertEquals(1, policy.approaches(listOf(unknown), at(passed.lat, passed.lon, heading = 225.0), emptySet()).size)
+        assertTrue("지나친 것은 여전히 뺀다", policy.approaches(listOf(unknown), passed, emptySet()).isEmpty())
+    }
+
+    @Test
     fun `10초 안에 닿을 때만 묻고 안내 사이는 5분을 둔다`() {
         val far = Approach(message, distanceM = 190.0, etaSec = 17.0)
         val near = Approach(message, distanceM = 100.0, etaSec = 9.0)

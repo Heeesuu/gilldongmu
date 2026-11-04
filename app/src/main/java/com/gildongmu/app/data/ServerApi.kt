@@ -45,10 +45,10 @@ class ServerApi(
             .put("recorded_at", meta.recordedAt)
             .put("lat", meta.lat)
             .put("lon", meta.lon)
-            .put("heading", meta.heading)
             .put("speed_kmh", meta.speedKmh)
             .put("duration_ms", meta.durationMs)
-        // 모르면 보내지 않는다 (docs/api.md 3.2).
+        // 모르면 보내지 않는다 (docs/api.md 3.2). 방향이 없으면 서버는 양쪽 방향 모두에 들려준다.
+        meta.heading?.let { metaJson.put("heading", it) }
         meta.wiperOn?.let { metaJson.put("wiper_on", it) }
         meta.headlightOn?.let { metaJson.put("headlight_on", it) }
 
@@ -161,7 +161,7 @@ class ServerApi(
                 kind = Kind.of(m.optString("kind")),
                 lat = m.getDouble("lat"),
                 lon = m.getDouble("lon"),
-                heading = m.getDouble("heading"),
+                heading = if (m.isNull("heading")) null else m.getDouble("heading"),
                 distanceM = m.getInt("distance_m"),
                 etaSec = if (m.isNull("eta_sec")) null else m.getInt("eta_sec"),
                 durationMs = m.getInt("duration_ms"),

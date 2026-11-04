@@ -111,6 +111,34 @@ func TestUploadRejectsWrongInput(t *testing.T) {
 	}
 }
 
+// 올릴 때 heading은 빠져도 되고, 찾기 응답에는 null로 나간다.
+func TestUploadWithoutHeading(t *testing.T) {
+	api, env := newAPI(t)
+
+	body, ct := uploadBody(t, "audio/ogg", `{"recorded_at":"2026-11-07T23:50:00Z","lat":37.5672,"lon":126.979,"speed_kmh":0,"duration_ms":6400}`)
+	resp, data := api.do("POST", "/v1/messages", author, body, ct)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("heading 없이도 202여야 합니다: %d %s", resp.StatusCode, data)
+	}
+	var uploaded struct{ ID string }
+	_ = json.Unmarshal(data, &uploaded)
+	if err := env.Moderation.Moderate(context.Background(), uploaded.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	near := fmt.Sprintf("/v1/messages/nearby?lat=%v&lon=%v&heading=225&speed_kmh=40", ts.PassedLat, ts.PassedLon)
+	resp, data = api.do("GET", near, listener, nil, "")
+	var nearby struct {
+		Messages []struct {
+			Heading *float64 `json:"heading"`
+		} `json:"messages"`
+	}
+	_ = json.Unmarshal(data, &nearby)
+	if resp.StatusCode != http.StatusOK || len(nearby.Messages) != 1 || nearby.Messages[0].Heading != nil {
+		t.Errorf("반대 방향에서도 보이고 heading은 null이어야 합니다: %d %s", resp.StatusCode, data)
+	}
+}
+
 // 올리기 → 검수 → 찾기 → 음성 → 고마워요 → 들은 결과 → 내 목록 → 삭제를 계약서 모양대로 확인한다.
 func TestMessageLifecycle(t *testing.T) {
 	api, env := newAPI(t)

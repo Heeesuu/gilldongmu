@@ -27,11 +27,14 @@ class GuidePolicy(
         return moved >= pollDistanceM || nowMs - last.timeMs >= nextPollSec * 1_000L
     }
 
-    /** 서버 순서를 유지한 채, 아직 같은 방향·앞쪽에 있는 한마디만 남긴다. 이미 지나친 것과 `excluded`는 빠진다. */
+    /**
+     * 서버 순서를 유지한 채, 아직 같은 방향·앞쪽에 있는 한마디만 남긴다. 이미 지나친 것과 `excluded`는 빠진다.
+     * 방향을 모르는 한마디는 같은 방향 조건을 건너뛴다(서버와 같다).
+     */
     fun approaches(messages: List<NearbyMessage>, state: DriveState, excluded: Set<String>): List<Approach> {
         val heading = state.heading ?: return emptyList()
         return messages.filter { it.id !in excluded }.mapNotNull { m ->
-            val sameDirection = Geo.angleDiff(m.heading, heading) <= SAME_DIRECTION_DEG
+            val sameDirection = m.heading?.let { Geo.angleDiff(it, heading) <= SAME_DIRECTION_DEG } ?: true
             val ahead = Geo.angleDiff(Geo.bearing(state.lat, state.lon, m.lat, m.lon), heading) <= AHEAD_DEG
             if (!sameDirection || !ahead) return@mapNotNull null
             val distance = Geo.distanceMeters(state.lat, state.lon, m.lat, m.lon)

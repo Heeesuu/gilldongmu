@@ -82,7 +82,10 @@ class MainActivity : Activity() {
             canPrompt = { record.phase == RecordController.Phase.IDLE },
             filterOn = { settings.filterOn },
         )
-        tracker = DriveTracker(this) { guide.onDrive(it) }
+        tracker = DriveTracker(this) {
+            guide.onDrive(it)
+            record.onDrive(it)
+        }
         drivingMode = DrivingMode(this) { onDrivingChanged(it) }
         vehicle = VehicleSignals(this)
         myMessages = MyMessages(api)

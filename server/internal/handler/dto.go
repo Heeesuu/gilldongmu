@@ -8,6 +8,7 @@ import (
 )
 
 // uploadMeta는 POST /v1/messages의 meta 파트다. 0도 올바른 값이라 필수 숫자는 포인터로 받아 빠졌는지 확인한다.
+// heading은 빠져도 된다(방향을 끝내 모른 한마디).
 type uploadMeta struct {
 	RecordedAt  *time.Time `json:"recorded_at"`
 	Lat         *float64   `json:"lat"`
@@ -27,8 +28,6 @@ func (m uploadMeta) missing() string {
 		return "lat"
 	case m.Lon == nil:
 		return "lon"
-	case m.Heading == nil:
-		return "heading"
 	case m.SpeedKmh == nil:
 		return "speed_kmh"
 	case m.DurationMs == nil:
@@ -49,7 +48,7 @@ type nearbyMessage struct {
 	Kind        domain.Kind  `json:"kind"`
 	Lat         float64      `json:"lat"`
 	Lon         float64      `json:"lon"`
-	Heading     float64      `json:"heading"`
+	Heading     *float64     `json:"heading"`
 	DistanceM   int          `json:"distance_m"`
 	EtaSec      *int         `json:"eta_sec"`
 	DurationMs  int          `json:"duration_ms"`

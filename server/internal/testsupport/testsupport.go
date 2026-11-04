@@ -78,6 +78,17 @@ func NewEnv(t *testing.T) *Env {
 // UploadAt은 녹음 기본값으로 한마디를 올린다.
 func (e *Env) UploadAt(t *testing.T, deviceID string, lat, lon, heading float64) *domain.Message {
 	t.Helper()
+	return e.upload(t, deviceID, lat, lon, &heading)
+}
+
+// UploadWithoutHeading은 방향을 모른 채 한마디를 올린다.
+func (e *Env) UploadWithoutHeading(t *testing.T, deviceID string, lat, lon float64) *domain.Message {
+	t.Helper()
+	return e.upload(t, deviceID, lat, lon, nil)
+}
+
+func (e *Env) upload(t *testing.T, deviceID string, lat, lon float64, heading *float64) *domain.Message {
+	t.Helper()
 	m, err := e.Messages.Upload(context.Background(), usecase.UploadInput{
 		DeviceID:   deviceID,
 		Audio:      []byte("OggS-fake-opus"),
