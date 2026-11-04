@@ -4,19 +4,24 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
-import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.gildongmu.app.data.DeviceId
+import com.gildongmu.app.data.MyMessage
+import com.gildongmu.app.data.Review
 import com.gildongmu.app.data.ServerApi
 import com.gildongmu.app.data.Settings
 import com.gildongmu.app.drive.DriveTracker
@@ -26,13 +31,20 @@ import com.gildongmu.app.guide.GuideController
 import com.gildongmu.app.guide.SteeringKeys
 import com.gildongmu.app.record.MyMessages
 import com.gildongmu.app.record.RecordController
+import com.gildongmu.app.ui.ActionButton
+import com.gildongmu.app.ui.ActionButton.Look
+import com.gildongmu.app.ui.RoadStripView
+import kotlin.math.roundToInt
 
 /**
- * 길동무 본 화면 (MVP 1단계 듣기 + 2단계 남기기 + 3단계 주행/정차 화면).
- * - 주행 중: 안내 한 줄, 단계 아이콘, 큰 버튼만. 글자 입력·애니메이션·설정은 없다 (CarUxRestrictions).
- * - 정차 중: 위에 더해 내 꽃밭(꽃 소식, 내 한마디), 설정, 상태와 기록을 보여준다.
+ * 길동무 본 화면. 디자인은 B안 "길 띠": 왼쪽 띠에 앞쪽 길 위 한마디를 놓고, 오른쪽에 안내 카드와 남기기 버튼을 둔다.
+ * - 주행 중: 길 띠, 안내 한 줄, 그때 필요한 큰 버튼만. 글자 입력·애니메이션·설정은 없다 (CarUxRestrictions).
+ * - 정차 중: 위에 더해 탭으로 내 꽃밭과 설정을 볼 수 있다.
+ * - 낮·밤 색은 차 설정을 따르고(values-night), 창이 세로로 길면(화면 나누기) 띠를 위로 눕힌다.
  */
 class MainActivity : Activity() {
+
+    private enum class Tab { ROAD, GARDEN, SETTINGS }
 
     private val ui = Handler(Looper.getMainLooper())
 
@@ -45,25 +57,38 @@ class MainActivity : Activity() {
     private lateinit var myMessages: MyMessages
 
     private lateinit var modeText: TextView
-    private lateinit var stageIcon: ImageView
-    private lateinit var guideText: TextView
-    private lateinit var listenButton: Button
-    private lateinit var skipButton: Button
-    private lateinit var thanksButton: Button
-    private lateinit var recordText: TextView
-    private lateinit var recordButton: Button
-    private lateinit var aheadText: TextView
-    private lateinit var parkedOnly: LinearLayout
-    private lateinit var bloomText: TextView
-    private lateinit var gardenRows: LinearLayout
-    private lateinit var filterButton: Button
-    private lateinit var driveText: TextView
-    private lateinit var serverText: TextView
-    private lateinit var logText: TextView
+    private lateinit var tabBar: LinearLayout
+    private lateinit var tabButtons: Map<Tab, ActionButton>
+    private lateinit var pages: Map<Tab, View>
 
+    // 길 탭
+    private lateinit var strip: RoadStripView
+    private lateinit var stageIcon: ImageView
+    private lateinit var titleText: TextView
+    private lateinit var detailText: TextView
+    private lateinit var actions: LinearLayout
+    private lateinit var listenButton: ActionButton
+    private lateinit var skipButton: ActionButton
+    private lateinit var thanksButton: ActionButton
+    private lateinit var recordText: TextView
+    private lateinit var recordButton: ActionButton
+
+    // 내 꽃밭 탭
+    private lateinit var newsText: TextView
+    private lateinit var bloomText: TextView
+    private lateinit var gardenGrid: LinearLayout
+
+    // 설정 탭
+    private lateinit var filterButton: ActionButton
+    private var driveText: TextView? = null
+    private var serverText: TextView? = null
+    private var logText: TextView? = null
+
+    private var tab = Tab.ROAD
     private var filterDialog: AlertDialog? = null
-    /** 내 꽃밭 줄을 다시 그릴지 정하는 값. 0.5초마다 render()가 돌아서 바뀔 때만 다시 만든다. */
+    /** 내 꽃밭을 다시 그릴지 정하는 값. 0.5초마다 render()가 돌아서 바뀔 때만 다시 만든다. */
     private var gardenKey = ""
+    private val medium = Typeface.create(Typeface.DEFAULT, 500, false)
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -101,6 +126,13 @@ class MainActivity : Activity() {
         } else {
             requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), REQUEST_LOCATION)
         }
+    }
+
+    /** 화면 나누기·낮밤 전환: 듣기·녹음은 그대로 두고 색과 배치만 새 설정으로 다시 만든다. */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        setContentView(buildLayout())
+        render()
     }
 
     override fun onResume() {
@@ -184,132 +216,269 @@ class MainActivity : Activity() {
 
     private fun render() {
         val driving = drivingMode.driving
-        modeText.text = if (driving) "주행 중 · 소리로 안내해요" else "정차 중 · 내 꽃밭과 설정을 볼 수 있어요"
+        // 주행 중에는 길 탭만 보여준다.
+        if (driving) tab = Tab.ROAD
+        modeText.update(if (driving) "주행 중" else "정차 중")
+        tabBar.visibility = if (driving) View.GONE else View.VISIBLE
+        tabButtons.forEach { (t, button) -> button.look = if (t == tab) Look.SELECTED else Look.OUTLINE }
+        pages.forEach { (t, page) -> page.visibility = if (t == tab) View.VISIBLE else View.GONE }
+        when (tab) {
+            Tab.ROAD -> renderRoad()
+            Tab.GARDEN -> renderGarden()
+            Tab.SETTINGS -> renderSettings()
+        }
+    }
 
+    private fun renderRoad() {
+        val status = guide.status()
+        titleText.update(status.title)
+        detailText.update(status.detail)
+        detailText.visibility = if (status.detail.isEmpty()) View.GONE else View.VISIBLE
         val stage = guide.shownStage()
-        stageIcon.visibility = if (stage == null) View.INVISIBLE else View.VISIBLE
+        stageIcon.visibility = if (stage == null) View.GONE else View.VISIBLE
         stage?.let { stageIcon.setImageResource(StageIcon.of(it)) }
-        guideText.text = guide.statusText()
 
+        strip.pins = guide.shownAhead().map {
+            RoadStripView.Pin(it.message.id, (it.distanceM / 10).roundToInt() * 10, it.message.stage, it.message.id == guide.currentId)
+        }
+
+        // 그때 할 수 있는 것만 버튼으로 보여준다.
         val phase = guide.phase
-        listenButton.isEnabled = phase == GuideController.Phase.PROMPTING
-        skipButton.isEnabled = phase != GuideController.Phase.IDLE
-        thanksButton.isEnabled = guide.lastHeard != null || phase == GuideController.Phase.PLAYING
-        thanksButton.text = guide.lastThanks?.let { "고마워요 ${it.thanksCount}" } ?: "고마워요"
+        listenButton.visibility = if (phase == GuideController.Phase.PROMPTING) View.VISIBLE else View.GONE
+        skipButton.visibility = if (phase == GuideController.Phase.IDLE) View.GONE else View.VISIBLE
+        skipButton.setLabel(if (phase == GuideController.Phase.PROMPTING) "넘기기" else "그만 듣기")
+        val canThank = guide.lastHeard != null || phase == GuideController.Phase.PLAYING
+        thanksButton.visibility = if (canThank) View.VISIBLE else View.GONE
+        thanksButton.setLabel(guide.lastThanks?.let { "고마워요 ${it.thanksCount}" } ?: "고마워요")
+        actions.visibility = if (listOf(listenButton, skipButton, thanksButton).any { it.visibility == View.VISIBLE }) View.VISIBLE else View.GONE
 
         // 듣는 중에는 녹음하지 않는다. 녹음 중에는 끝내기 버튼으로 쓴다.
         val recording = record.phase == RecordController.Phase.RECORDING
-        recordText.text = record.statusText()
-        recordButton.text = if (recording) "녹음 끝내기" else "한마디 남기기"
+        recordText.update(record.statusText())
+        recordButton.look = if (recording) Look.REC else Look.SEED
+        recordButton.setLabel(if (recording) "녹음 끝내기" else "한마디 남기기")
+        recordButton.setIcon(if (recording) R.drawable.ic_stop else R.drawable.ic_mic)
         recordButton.isEnabled = recording ||
             (record.phase == RecordController.Phase.IDLE && phase == GuideController.Phase.IDLE)
-
-        aheadText.text = guide.aheadSummary(brief = driving)
-
-        parkedOnly.visibility = if (driving) View.GONE else View.VISIBLE
-        if (driving) return
-        bloomText.text = listOfNotNull(myMessages.news, MyMessages.bloomSummary(myMessages.items))
-            .joinToString("\n")
-            .ifEmpty { "아직 남긴 한마디가 없어요. 운전하다 떠오른 한마디를 남겨 보세요." }
-        renderGarden()
-        filterButton.text = if (settings.filterOn) "비속어 필터 켜짐 · 끄기" else "비속어 필터 꺼짐 · 켜기"
-        driveText.text = tracker.latest?.let(DriveTracker::describe) ?: "GPS 위치를 기다리는 중"
-        serverText.text = guide.serverStatus
-        logText.text = EventLog.recent()
     }
 
     private fun renderGarden() {
-        val items = myMessages.items.take(GARDEN_ROWS)
+        val news = myMessages.news
+        newsText.update(news.orEmpty())
+        newsText.visibility = if (news == null) View.GONE else View.VISIBLE
+        bloomText.update(MyMessages.bloomSummary(myMessages.items) ?: "아직 남긴 한마디가 없어요. 운전하다 떠오른 한마디를 남겨 보세요.")
+
+        val items = myMessages.items.take(GARDEN_TILES)
         val key = items.joinToString { "${it.id}:${it.stage}:${it.review}:${it.listenCount}:${it.thanksCount}" }
         if (key == gardenKey) return
         gardenKey = key
-        gardenRows.removeAllViews()
-        items.forEach { m ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(6), 0, dp(6))
-            }
-            row.addView(ImageView(this).apply { setImageResource(StageIcon.of(m.stage)) }, LinearLayout.LayoutParams(dp(56), dp(56)))
-            row.addView(text(myMessages.lineOf(m), 17f).apply { setPadding(dp(16), 0, 0, 0) })
-            gardenRows.addView(row)
+        gardenGrid.removeAllViews()
+        val perRow = if (isWide()) 4 else 2
+        items.chunked(perRow).forEach { chunk ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            chunk.forEach { row.addView(gardenTile(it)) }
+            // 마지막 줄이 덜 차도 칸 너비를 맞춘다.
+            repeat(perRow - chunk.size) { row.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f)) }
+            gardenGrid.addView(row)
         }
+    }
+
+    private fun renderSettings() {
+        filterButton.setLabel(if (settings.filterOn) "켜짐 · 끄기" else "꺼짐 · 켜기")
+        driveText?.update(tracker.latest?.let(DriveTracker::describe) ?: "GPS 위치를 기다리는 중")
+        serverText?.update(guide.serverStatus)
+        logText?.update(EventLog.recent())
     }
 
     private fun buildLayout(): View {
-        val column = LinearLayout(this).apply {
+        gardenKey = ""
+        window.setBackgroundDrawable(ColorDrawable(getColor(R.color.gd_bg)))
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(32), dp(24), dp(32), dp(48))
+            setBackgroundColor(getColor(R.color.gd_bg))
+            setPadding(dp(32), dp(20), dp(32), dp(24))
         }
-        column.addView(text("길동무", 34f, bold = true))
-        modeText = text("", 18f).also { column.addView(it) }
 
-        // 안내: 단계 아이콘 + 안내 문장
-        column.addView(heading("안내"))
-        val card = LinearLayout(this).apply {
+        // 머리줄: 앱 이름과 주행·정차
+        val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        stageIcon = ImageView(this).also { card.addView(it, LinearLayout.LayoutParams(dp(96), dp(96))) }
-        guideText = text("-", 24f).apply { setPadding(dp(16), 0, 0, 0) }.also { card.addView(it) }
-        column.addView(card)
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        listenButton = button(row, "듣기") { guide.accept() }
-        skipButton = button(row, "넘기기") { guide.skip() }
-        thanksButton = button(row, "고마워요") { guide.thanks() }
-        column.addView(row)
+        header.addView(text("길동무", 30f, medium = true))
+        header.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f))
+        modeText = text("", 22f, R.color.gd_text_sub).also { header.addView(it) }
+        root.addView(header)
 
-        column.addView(heading("남기기"))
-        recordText = text("-", 20f).also { column.addView(it) }
-        val recordRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        recordButton = button(recordRow, "한마디 남기기") { onRecordPressed() }.apply { minimumWidth = dp(360) }
-        column.addView(recordRow)
+        // 탭: 정차 중에만
+        tabBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        tabButtons = linkedMapOf(
+            Tab.ROAD to ActionButton(this, "길", R.drawable.ic_route, Look.SELECTED, textSp = 24f),
+            Tab.GARDEN to ActionButton(this, "내 꽃밭", R.drawable.ic_florist, Look.OUTLINE, textSp = 24f),
+            Tab.SETTINGS to ActionButton(this, "설정", R.drawable.ic_settings, Look.OUTLINE, textSp = 24f),
+        )
+        tabButtons.forEach { (t, button) ->
+            button.onClick { tab = t; render() }
+            tabBar.addView(button, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(72)).apply { marginEnd = dp(12) })
+        }
+        root.addView(tabBar, margins(top = 16))
 
-        column.addView(heading("앞쪽 길"))
-        aheadText = text("-", 20f).also { column.addView(it) }
+        val content = FrameLayout(this)
+        pages = linkedMapOf(
+            Tab.ROAD to buildRoadPage(),
+            Tab.GARDEN to buildGardenPage(),
+            Tab.SETTINGS to buildSettingsPage(),
+        )
+        pages.values.forEach { content.addView(it, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)) }
+        root.addView(content, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(20) })
+        return root
+    }
 
-        // 정차 중에만 보이는 부분
-        parkedOnly = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        parkedOnly.addView(heading("내 꽃밭"))
-        bloomText = text("-", 19f).also { parkedOnly.addView(it) }
-        gardenRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }.also { parkedOnly.addView(it) }
-        parkedOnly.addView(heading("설정"))
-        val settingsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        filterButton = button(settingsRow, "비속어 필터") { onFilterPressed() }.apply { minimumWidth = dp(360) }
-        parkedOnly.addView(settingsRow)
-        parkedOnly.addView(heading("지금"))
-        driveText = text("-", 18f).also { parkedOnly.addView(it) }
-        parkedOnly.addView(heading("서버"))
-        serverText = text("-", 16f).also { parkedOnly.addView(it) }
-        parkedOnly.addView(heading("최근 기록"))
-        logText = text("", 14f).also { parkedOnly.addView(it) }
-        column.addView(parkedOnly)
+    private fun buildRoadPage(): View {
+        val wide = isWide()
+        strip = RoadStripView(this)
 
+        // 안내 카드: 단계 아이콘 + 큰 글자 한 줄 + 작은 글자 한 줄, 아래에 그때 필요한 버튼
+        // 내용은 카드 가운데에 모은다. 버튼이 없는 때(조용한 때)에도 카드가 비어 보이지 않게 하려는 것이다.
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(R.color.gd_surface, 28)
+            setPadding(dp(36), dp(32), dp(36), dp(32))
+        }
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        stageIcon = ImageView(this).also { top.addView(it, LinearLayout.LayoutParams(dp(88), dp(88)).apply { marginEnd = dp(24) }) }
+        val words = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        titleText = text("", 36f, medium = true, maxLines = 2).also { words.addView(it) }
+        detailText = text("", 22f, R.color.gd_text_sub, maxLines = 2).also { words.addView(it, margins(top = 8)) }
+        top.addView(words, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        card.addView(top)
+        actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        listenButton = ActionButton(this, "듣기", R.drawable.ic_play, Look.GO).apply { onClick { guide.accept() } }
+        skipButton = ActionButton(this, "넘기기", R.drawable.ic_skip, Look.OUTLINE).apply { onClick { guide.skip() } }
+        thanksButton = ActionButton(this, "고마워요", R.drawable.ic_favorite, Look.OUTLINE).apply { onClick { guide.thanks() } }
+        listOf(listenButton, skipButton, thanksButton).forEachIndexed { i, button ->
+            actions.addView(button, LinearLayout.LayoutParams(0, dp(104), 1f).apply { if (i > 0) marginStart = dp(16) })
+        }
+        card.addView(actions, margins(top = 40))
+
+        // 남기기: 상태 한 줄 + 가장 큰 버튼
+        val recordArea = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        recordText = text("", 22f, R.color.gd_text_sub, maxLines = 2).also { recordArea.addView(it) }
+        recordButton = ActionButton(this, "한마디 남기기", R.drawable.ic_mic, Look.SEED, textSp = 30f).apply { onClick { onRecordPressed() } }
+        recordArea.addView(recordButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(112)).apply { topMargin = dp(12) })
+
+        val side = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        side.addView(card, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        side.addView(recordArea, margins(top = 20))
+
+        // 가로로 넓으면 띠를 왼쪽에 세우고, 세로로 길면(화면 나누기) 위에 눕힌다.
+        return LinearLayout(this).apply {
+            if (wide) {
+                orientation = LinearLayout.HORIZONTAL
+                addView(strip, LinearLayout.LayoutParams(dp(300), LinearLayout.LayoutParams.MATCH_PARENT))
+                addView(side, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply { marginStart = dp(24) })
+            } else {
+                orientation = LinearLayout.VERTICAL
+                addView(strip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(200)))
+                addView(side, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(16) })
+            }
+        }
+    }
+
+    private fun buildGardenPage(): View {
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        newsText = text("", 28f, medium = true).also { column.addView(it, margins(bottom = 8)) }
+        bloomText = text("", 22f, R.color.gd_text_sub).also { column.addView(it) }
+        gardenGrid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }.also { column.addView(it, margins(top = 16)) }
         return ScrollView(this).apply { addView(column) }
     }
 
-    private fun heading(value: String) = text(value, 22f, bold = true).apply { setPadding(0, dp(24), 0, dp(4)) }
-
-    private fun button(parent: LinearLayout, label: String, action: () -> Unit) = Button(this).apply {
-        text = label
-        textSize = 22f
-        isAllCaps = false
-        minimumWidth = dp(180)
-        setOnClickListener { action() }
-        parent.addView(this)
+    private fun gardenTile(m: MyMessage) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        background = rounded(R.color.gd_surface, 24)
+        setPadding(dp(20), dp(24), dp(20), dp(24))
+        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(8), dp(8), dp(8), dp(8)) }
+        addView(ImageView(this@MainActivity).apply { setImageResource(StageIcon.of(m.stage)) }, LinearLayout.LayoutParams(dp(80), dp(80)))
+        addView(text("${m.kind.label} · ${m.stage.label}", 24f, medium = true, maxLines = 1).apply { gravity = Gravity.CENTER }, margins(top = 12))
+        addView(text("들은 ${m.listenCount}명 · 고마워요 ${m.thanksCount}", 20f, R.color.gd_text_sub, maxLines = 1).apply { gravity = Gravity.CENTER }, margins(top = 4))
+        if (m.review != Review.CLEAN) {
+            addView(text(m.review.label, 20f, R.color.gd_text_sub, maxLines = 1).apply { gravity = Gravity.CENTER })
+        }
     }
 
-    private fun text(value: String, size: Float, bold: Boolean = false) = TextView(this).apply {
-        text = value
-        textSize = size
-        if (bold) setTypeface(typeface, Typeface.BOLD)
+    private fun buildSettingsPage(): View {
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+        filterButton = ActionButton(this, "켜짐 · 끄기", R.drawable.ic_settings, Look.OUTLINE, textSp = 24f).apply { onClick { onFilterPressed() } }
+        column.addView(settingCard("비속어 필터", "켜 두면 거친 말이 섞인 한마디는 들려주지 않아요.", filterButton))
+        column.addView(settingCard("오픈소스 라이선스", "아이콘: Material Symbols (Apache License 2.0)\n글꼴: 차에 들어 있는 Asta Sans", null), margins(top = 16))
+
+        // 개발용 상태는 디버그 빌드에만 보여준다. 심사·시연용 릴리스 화면에는 없다.
+        if (BuildConfig.DEBUG) {
+            val debug = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = rounded(R.color.gd_surface, 24)
+                setPadding(dp(28), dp(24), dp(28), dp(24))
+            }
+            debug.addView(text("개발용 상태 (디버그 빌드에만 보여요)", 24f, medium = true))
+            driveText = text("", 20f, R.color.gd_text_sub).also { debug.addView(it, margins(top = 8)) }
+            serverText = text("", 20f, R.color.gd_text_sub).also { debug.addView(it, margins(top = 4)) }
+            logText = text("", 16f, R.color.gd_text_sub, maxLines = 40).also { debug.addView(it, margins(top = 12)) }
+            column.addView(debug, margins(top = 16))
+        }
+        return ScrollView(this).apply { addView(column) }
     }
+
+    private fun settingCard(title: String, description: String, action: View?) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        background = rounded(R.color.gd_surface, 24)
+        setPadding(dp(28), dp(24), dp(28), dp(24))
+        val words = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        words.addView(text(title, 26f, medium = true))
+        words.addView(text(description, 20f, R.color.gd_text_sub), margins(top = 6))
+        addView(words, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        action?.let { addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(88)).apply { marginStart = dp(24) }) }
+    }
+
+    /** 창이 가로로 넓은가. 화면 나누기로 세로로 길어지면 false. */
+    private fun isWide() = resources.configuration.let { it.screenWidthDp >= it.screenHeightDp }
+
+    private fun text(value: String, size: Float, color: Int = R.color.gd_text, medium: Boolean = false, maxLines: Int = 3) =
+        TextView(this).apply {
+            text = value
+            textSize = size
+            setTextColor(getColor(color))
+            if (medium) typeface = this@MainActivity.medium
+            this.maxLines = maxLines
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+
+    /** 0.5초마다 같은 글자를 다시 넣어 화면을 다시 재지 않도록, 바뀔 때만 넣는다. */
+    private fun TextView.update(value: String) {
+        if (text.toString() != value) text = value
+    }
+
+    private fun rounded(color: Int, radiusDp: Int) = GradientDrawable().apply {
+        cornerRadius = dp(radiusDp).toFloat()
+        setColor(getColor(color))
+    }
+
+    private fun margins(top: Int = 0, bottom: Int = 0) =
+        LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(top)
+            bottomMargin = dp(bottom)
+        }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     companion object {
         private const val REQUEST_LOCATION = 1
         private const val REQUEST_RECORD = 2
-        private const val GARDEN_ROWS = 8
+        private const val GARDEN_TILES = 12
     }
 }

@@ -12,6 +12,7 @@ import com.gildongmu.app.data.ServerApi
 import com.gildongmu.app.data.Stage
 import com.gildongmu.app.data.ThanksResult
 import com.gildongmu.app.drive.DriveState
+import com.gildongmu.app.drive.Geo
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -34,6 +35,9 @@ class GuideController(
     private val filterOn: () -> Boolean = { true },
 ) {
     enum class Phase { IDLE, PROMPTING, LOADING, PLAYING }
+
+    /** 안내 카드의 큰 글자 한 줄과 작은 글자 한 줄. 주행 중에 1~2초 안에 읽히도록 짧게 쓴다. */
+    data class Status(val title: String, val detail: String)
 
     private val handler = Handler(Looper.getMainLooper())
     private val audio = GuideAudio(context) { onFocusLost() }
@@ -154,54 +158,70 @@ class GuideController(
         api.shutdown()
     }
 
-    /** `brief`이면 개수 한 줄만 돌려준다 (주행 중 화면). */
-    fun aheadSummary(brief: Boolean = false): String {
+    /** 앞쪽 길 한 줄. 자세한 위치는 길 띠가 보여준다. */
+    private fun aheadLine(): String {
         if (!api.configured) return serverStatus
-        if (drive?.heading == null) return "움직이기 시작하면 앞쪽 길을 살펴요."
-        if (approaches.isEmpty()) return "앞쪽 길에 남겨진 한마디가 없어요."
+        if (drive?.heading == null) return "움직이기 시작하면 앞쪽 길을 살펴요"
+        if (approaches.isEmpty()) return "앞쪽 길에 남겨진 한마디가 없어요"
         // 서버가 센 수에서, 조회 뒤에 지나쳤거나 이미 물어본 것만큼 뺀다.
         val count = (totalAhead - (messages.size - approaches.size)).coerceAtLeast(approaches.size)
-        if (brief) return "앞쪽 길에 남겨진 한마디가 ${count}개 있어요."
-        val lines = approaches.joinToString("\n") { a ->
-            val eta = a.etaSec?.let { " · ${it.roundToInt()}초 뒤" }.orEmpty()
-            "· ${a.message.kind.label} · ${a.message.stage.label} · ${a.distanceM.roundToInt()}m$eta"
-        }
-        return "앞쪽 길에 남겨진 한마디가 ${count}개 있어요.\n$lines"
+        return "앞쪽 길에 한마디가 ${count}개 있어요"
     }
 
-    fun statusText(): String {
+    fun status(): Status {
         val message = current
         return when (phase) {
-            Phase.IDLE -> idleText()
+            Phase.IDLE -> idleStatus()
             Phase.PROMPTING -> {
                 val left = ((promptDeadlineMs - clock()) / 1_000).coerceAtLeast(0)
-                "앞쪽에 ${message?.kind?.label} 한마디가 있어요. 들을까요? (${left}초)\n" +
-                    "핸들 재생 버튼: 듣기 · 다음 곡 버튼: 넘기기"
-            }
-            Phase.LOADING -> "한마디를 불러오는 중이에요."
-            Phase.PLAYING -> {
-                val total = (message?.durationMs ?: 0) / 1_000.0
-                "%s 한마디 %.0f / %.0f초 · %s\n핸들 버튼을 누르면 멈춰요.".format(
-                    Locale.KOREA, message?.kind?.label, audio.positionMs / 1_000.0, total, audio.state,
+                val distance = drive?.let { d -> message?.let { Geo.distanceMeters(d.lat, d.lon, it.lat, it.lon).roundToInt() } }
+                Status(
+                    "${message?.kind?.label} 한마디가 있어요. 들을까요?",
+                    listOfNotNull(distance?.let { "앞쪽 ${it}m" }, message?.stage?.label, "${left}초", "핸들 재생 버튼으로도 들어요")
+                        .joinToString(" · "),
                 )
             }
+            Phase.LOADING -> Status("한마디를 불러오는 중이에요", "")
+            Phase.PLAYING -> Status(
+                "${message?.kind?.label} 한마디를 듣고 있어요",
+                "%.0f / %.0f초 · %s".format(
+                    Locale.KOREA, audio.positionMs / 1_000.0, (message?.durationMs ?: 0) / 1_000.0, audio.state,
+                ),
+            )
         }
     }
 
-    private fun idleText(): String {
+    /**
+     * 길 띠에 그릴 한마디: 지금 묻거나 틀고 있는 한마디와 앞쪽 후보를 가까운 순으로.
+     * 지금 한마디를 막 지나쳤으면 차 바로 앞(0m)에 둔다.
+     */
+    fun shownAhead(): List<Approach> {
+        val d = drive ?: return emptyList()
+        val now = current?.let { m ->
+            val heading = d.heading
+            val passed = heading != null && Geo.angleDiff(Geo.bearing(d.lat, d.lon, m.lat, m.lon), heading) > 90
+            Approach(m, if (passed) 0.0 else Geo.distanceMeters(d.lat, d.lon, m.lat, m.lon), etaSec = null)
+        }
+        return (listOfNotNull(now) + approaches.filter { it.message.id != now?.message?.id }).sortedBy { it.distanceM }
+    }
+
+    /** 지금 묻거나 틀고 있는 한마디의 id. 길 띠에서 강조한다. */
+    val currentId: String? get() = current?.id
+
+    private fun idleStatus(): Status {
         val wait = lastPromptAtMs?.let { policy.promptIntervalMs - (clock() - it) }?.takeIf { it > 0 }
-        val thanks = lastThanks
-        val heard = when {
-            thanks?.stage == Stage.FLOWER -> "꽃이 피었어요! 이 한마디에 고마워요가 ${thanks.thanksCount}개 모였어요.\n"
-            thanks != null -> "고마워요를 남겼어요. 지금 ${thanks.thanksCount}개예요.\n"
-            else -> lastHeard?.let { "방금 들은 ${it.kind.label} 한마디가 좋았다면 고마워요를 눌러 주세요.\n" }.orEmpty()
-        }
         val next = if (wait != null) {
-            "다음 안내는 %d분 %02d초 뒤부터예요.".format(Locale.KOREA, wait / 60_000, wait / 1_000 % 60)
+            "다음 안내는 %d분 %02d초 뒤부터예요".format(Locale.KOREA, wait / 60_000, wait / 1_000 % 60)
         } else {
-            "앞쪽 한마디에 10초 안에 닿으면 알려 드려요."
+            "한마디에 10초 안에 닿으면 알려 드려요"
         }
-        return heard + next
+        val thanks = lastThanks
+        return when {
+            thanks?.stage == Stage.FLOWER -> Status("꽃이 피었어요!", "이 한마디에 고마워요가 ${thanks.thanksCount}개 모였어요")
+            thanks != null -> Status("고마워요를 남겼어요", "지금 ${thanks.thanksCount}개예요 · $next")
+            lastHeard != null -> Status("방금 들은 한마디, 좋았나요?", "고마워요를 눌러 주세요 · $next")
+            else -> Status(aheadLine(), next)
+        }
     }
 
     private fun poll(state: DriveState) {
