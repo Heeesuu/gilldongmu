@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 길동무 색 (밤). 이름과 쓰임은 values/colors.xml과 같다. -->
+<resources>
+    <color name="gd_bg">#1C1C1A</color>
+    <color name="gd_surface">#2C2C2A</color>
+    <color name="gd_road">#3A3A37</color>
+    <color name="gd_lane">#9C9A92</color>
+    <color name="gd_text">#F1EFE8</color>
+    <color name="gd_text_sub">#B4B2A9</color>
+    <color name="gd_outline">#888780</color>
+    <color name="gd_press">#33F1EFE8</color>
+
+    <color name="gd_go">#97C459</color>
+    <color name="gd_on_go">#173404</color>
+    <color name="gd_seed">#EF9F27</color>
+    <color name="gd_on_seed">#412402</color>
+    <color name="gd_rec">#F09595</color>
+    <color name="gd_on_rec">#501313</color>
+
+    <color name="gd_highlight">#97C459</color>
+
+    <color name="gd_pin_bg">#F1EFE8</color>
+    <color name="gd_stage_seed">#EF9F27</color>
+    <color name="gd_stage_sprout">#97C459</color>
+    <color name="gd_stage_flower">#ED93B1</color>
+    <color name="gd_stage_memory">#AFA9EC</color>
+</resources>

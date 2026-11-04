@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      낮·밤을 따라가는 기본 테마에서 제목 줄만 뺐다. 앱 이름과 주행·정차 표시는 화면 안 머리줄에 직접 그린다.
+      글꼴은 따로 넣지 않는다. Pleos는 기본 sans-serif가 Asta Sans라서 시스템 UI와 같은 글꼴이 된다.
+    -->
+    <style name="Theme.Gildongmu" parent="@android:style/Theme.DeviceDefault.DayNight">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowBackground">@color/gd_bg</item>
+    </style>
+</resources>
