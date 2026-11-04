@@ -53,6 +53,10 @@ type nearbyMessage struct {
 	EtaSec      *int         `json:"eta_sec"`
 	DurationMs  int          `json:"duration_ms"`
 	ThanksCount int          `json:"thanks_count"`
+	ListenCount int          `json:"listen_count"`
+	RecordedAt  time.Time    `json:"recorded_at"`
+	WiperOn     *bool        `json:"wiper_on"`
+	HeadlightOn *bool        `json:"headlight_on"`
 	CreatedAt   time.Time    `json:"created_at"`
 	ExpiresAt   *time.Time   `json:"expires_at"`
 	AudioURL    string       `json:"audio_url"`
@@ -111,6 +115,10 @@ func toNearbyResponse(r usecase.NearbyResult, now time.Time) nearbyResponse {
 			EtaSec:      item.EtaSec,
 			DurationMs:  m.DurationMs,
 			ThanksCount: m.ThanksCount,
+			ListenCount: m.ListenCount,
+			RecordedAt:  m.RecordedAt,
+			WiperOn:     m.WiperOn,
+			HeadlightOn: m.HeadlightOn,
 			CreatedAt:   m.CreatedAt,
 			ExpiresAt:   m.ExpiresAt,
 			AudioURL:    audioURL(m.ID),

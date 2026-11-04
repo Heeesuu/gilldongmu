@@ -13,7 +13,7 @@ import java.time.format.DateTimeFormatter
 
 /**
  * 내가 남긴 한마디의 단계와 반응 (`GET /v1/me/messages`).
- * 검수 중인 한마디가 있으면 5초마다, 없으면 1분마다 다시 읽고, 씨앗이 새싹이 되거나 꽃이 피면 알려 준다.
+ * 검수 중인 한마디가 있으면 5초마다, 없으면 1분마다 다시 읽고, 내 길동무가 길 위에 서거나(새싹) 꽃을 들면 알려 준다.
  */
 class MyMessages(private val api: ServerApi) {
 
@@ -77,14 +77,14 @@ class MyMessages(private val api: ServerApi) {
                 waiting -= m.id
                 tell(
                     when (m.review) {
-                        Review.CLEAN, Review.PROFANITY -> "새싹이 돋았어요 · ${m.kind.label} 한마디가 이제 같은 길의 차에 들려요"
+                        Review.CLEAN, Review.PROFANITY -> "내 길동무가 길 위에 섰어요 · 같은 길을 가는 차에 ${m.kind.label} 한마디가 들려요"
                         else -> "검수 결과 · ${m.review.label}"
                     },
                 )
             }
             val before = stages[m.id]
             if (before != null && before != Stage.FLOWER && m.stage == Stage.FLOWER) {
-                tell("꽃이 피었어요 · 고마워요 ${m.thanksCount}개")
+                tell("내 길동무가 꽃을 들었어요 · 고마워요 ${m.thanksCount}개")
             }
         }
     }
@@ -108,8 +108,8 @@ class MyMessages(private val api: ServerApi) {
             val listened = items.sumOf { it.listenCount }
             val thanked = items.sumOf { it.thanksCount }
             val flowers = items.count { it.stage == Stage.FLOWER }
-            val bloom = if (flowers > 0) " 꽃이 ${flowers}송이 피었어요." else ""
-            return "한마디 ${items.size}개를 남겼어요. ${listened}명이 들었고 ${thanked}명이 고마워했어요.$bloom"
+            val bloom = if (flowers > 0) " 꽃을 든 길동무가 ${flowers}명이에요." else ""
+            return "발자취 ${items.size}개를 남겼어요. ${listened}명이 들었고 ${thanked}명이 고마워했어요.$bloom"
         }
     }
 }

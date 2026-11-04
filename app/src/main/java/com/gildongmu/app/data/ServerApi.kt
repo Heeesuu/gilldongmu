@@ -99,6 +99,30 @@ class ServerApi(
         Unit
     }
 
+    /** 내 길동무. 아직 정하지 않았으면 null. */
+    fun profile(callback: (Result<Profile?>) -> Unit) = run(callback) {
+        parseProfile(JSONObject(request("GET", "me/profile").decodeToString()))
+    }
+
+    /** 닉네임과 모습을 저장한다. 비속어·30일 규칙은 서버가 본다(ApiException의 code). */
+    fun saveProfile(nickname: String, look: Look, callback: (Result<Profile>) -> Unit) = run(callback) {
+        val body = JSONObject()
+            .put("nickname", nickname)
+            .put("look", JSONObject().put("color", look.color).put("item", look.item.wire))
+        parseProfile(JSONObject(request("PUT", "me/profile", body.toString().toByteArray(), "application/json").decodeToString()))
+            ?: error("프로필을 저장하지 못했습니다.")
+    }
+
+    private fun parseProfile(json: JSONObject): Profile? {
+        if (json.isNull("nickname")) return null
+        val look = json.optJSONObject("look")
+        return Profile(
+            nickname = json.getString("nickname"),
+            look = Look(color = look?.optInt("color") ?: 0, item = LookItem.of(look?.optString("item").orEmpty())),
+            nextChangeAt = if (json.isNull("next_nickname_change_at")) null else json.getString("next_nickname_change_at"),
+        )
+    }
+
     fun shutdown() {
         worker.shutdownNow()
     }
@@ -124,7 +148,7 @@ class ServerApi(
             setRequestProperty("X-App-Version", appVersion)
         }
         try {
-            if (method == "POST") {
+            if (method == "POST" || method == "PUT") {
                 // 본문이 없는 POST도 Content-Length: 0을 보내도록 비어 있는 본문을 쓴다.
                 val bytes = body ?: ByteArray(0)
                 connection.doOutput = true
@@ -167,6 +191,10 @@ class ServerApi(
                 durationMs = m.getInt("duration_ms"),
                 thanksCount = m.getInt("thanks_count"),
                 audioUrl = m.getString("audio_url"),
+                listenCount = m.optInt("listen_count"),
+                recordedAt = m.optString("recorded_at"),
+                wiperOn = if (m.isNull("wiper_on")) null else m.optBoolean("wiper_on"),
+                headlightOn = if (m.isNull("headlight_on")) null else m.optBoolean("headlight_on"),
             )
         }
         return NearbyResult(

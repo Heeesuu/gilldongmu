@@ -46,9 +46,9 @@ class ActionButton(context: Context, label: String, icon: Int, look: Look, textS
         setPadding(dp(24f), 0, dp(24f), 0)
         val iconSize = dp(textSp * 1.3f)
         addView(iconView, LayoutParams(iconSize, iconSize))
-        addView(labelView, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { marginStart = dp(12f) })
+        addView(labelView, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { if (icon != NO_ICON) marginStart = dp(12f) })
         contentDescription = label
-        iconView.setImageResource(icon)
+        if (icon == NO_ICON) iconView.visibility = GONE else iconView.setImageResource(icon)
         applyLook()
     }
 
@@ -97,4 +97,9 @@ class ActionButton(context: Context, label: String, icon: Int, look: Look, textS
     }
 
     private fun dp(value: Float) = (value * density).toInt()
+
+    companion object {
+        /** 글자만 있는 버튼. */
+        const val NO_ICON = 0
+    }
 }

@@ -11,7 +11,7 @@ object AnswerWords {
 
     private val thanks = listOf("고마워", "고맙", "감사", "땡큐", "thank")
     private val stop = listOf("그만", "멈춰", "꺼 줘", "꺼줘", "조용")
-    private val skip = listOf("아니", "아뇨", "안 들", "안들", "됐어", "괜찮아", "넘겨", "넘어가", "다음", "패스", "싫어", "나중", "skip")
+    private val skip = listOf("아니", "아뇨", "안 들", "안들", "됐어", "괜찮아", "넘겨", "넘어가", "지나가", "지나갈", "다음", "패스", "싫어", "나중", "skip")
     private val listen = listOf(" 응 ", " 어 ", " 네 ", " 예 ", "그래", "좋아", "들어", "들을", "들려", "듣기", "틀어", "재생", "오케이", " ok ", "yes")
 
     fun match(text: String): Answer? {

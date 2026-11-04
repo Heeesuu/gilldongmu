@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import com.gildongmu.app.EventLog
+import com.gildongmu.app.data.Kind
 import com.gildongmu.app.data.ListenResult
 import com.gildongmu.app.data.NearbyMessage
 import com.gildongmu.app.data.NearbyQuery
@@ -21,7 +22,8 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * 듣는 흐름 하나를 끝까지 이끈다: 앞쪽 한마디 조회 → "들을까요?" → 묶음 차례로 재생 → 들은 결과 알리기.
+ * 듣는 흐름 하나를 끝까지 이끈다: 앞쪽 한마디 조회 → "들어 볼까요?" → 묶음 차례로 재생 → 들은 결과 알리기.
+ * 안내 문장은 "길동무가 그 자리에 남긴 말"이라는 말투로 쓴다 (디자인 "길동무").
  * 가까이 모인 한마디는 한 번에 묻고(GuidePolicy.pickPrompt), 대답은 버튼·핸들 버튼·말로 받는다.
  * 규칙은 docs/api.md 4장을 따르고, 판단은 [GuidePolicy], 소리는 [GuideAudio], 말은 [VoiceAnswer]에 맡긴다.
  * 모든 메서드는 메인 스레드에서 부른다.
@@ -37,12 +39,20 @@ class GuideController(
     private val filterOn: () -> Boolean = { true },
     /** 말로 대답하기 설정과 마이크 권한. 물을 때마다 읽는다. */
     private val voiceOn: () -> Boolean = { false },
+    /** 내 닉네임(내 기기에서만 보임). 조용할 때 인사에 쓴다. */
+    private val nickname: () -> String? = { null },
 ) {
     /** AFTER: 한마디 하나를 듣고 난 뒤 "고마워"를 기다리는 몇 초. */
     enum class Phase { IDLE, PROMPTING, LOADING, PLAYING, AFTER }
 
     /** 안내 카드의 큰 글자 한 줄과 작은 글자 한 줄. 주행 중에 1~2초 안에 읽히도록 짧게 쓴다. */
     data class Status(val title: String, val detail: String)
+
+    /** 안내 카드에 세울 길동무 한 명: 한마디 id(몸 색을 정함)와 단계(모습을 정함). */
+    data class Shown(val id: String, val stage: Stage)
+
+    /** 이번 길(앱을 켠 뒤)의 기록: 앞쪽에서 만난 길동무, 끝까지 들은 한마디, 내가 전한 고마워요. */
+    data class Trip(val met: Int, val heard: Int, val thanked: Int)
 
     private val handler = Handler(Looper.getMainLooper())
     private val audio = GuideAudio(context) { onFocusLost() }
@@ -76,6 +86,9 @@ class GuideController(
     private var deadlineMs = 0L
     /** 이번 주행에서 이미 물어본 한마디. 대답이 없었거나 넘긴 것도 다시 묻지 않는다. */
     private val asked = mutableSetOf<String>()
+    private val met = mutableSetOf<String>()
+    private var heardCount = 0
+    private var thankedCount = 0
 
     private val promptTimeout = Runnable {
         EventLog.add("안내", "${ANSWER_TIMEOUT_MS / 1_000}초 동안 대답이 없어 넘어가요")
@@ -180,6 +193,7 @@ class GuideController(
         val message = current?.takeIf { phase == Phase.PLAYING || phase == Phase.AFTER } ?: lastHeard ?: return
         api.thanks(message.id) { result ->
             result.onSuccess {
+                if (!it.alreadyThanked) thankedCount++
                 lastThanks = it
                 val note = if (it.alreadyThanked) " (이미 남겼어요)" else ""
                 EventLog.add("고마워요", "고마워요 ${it.thanksCount}개 · ${it.stage.label}$note")
@@ -192,8 +206,42 @@ class GuideController(
         lastPoll = null
     }
 
-    /** 화면에 그릴 단계: 고마워요 결과가 있으면 그 단계(꽃이 피는 순간), 아니면 묻거나 들은 한마디의 단계. */
-    fun shownStage(): Stage? = lastThanks?.stage ?: (current ?: lastHeard)?.stage
+    /**
+     * 안내 카드에 세울 길동무: 묻는 중이면 묶음 전체, 듣는 중이면 지금 한마디, 그 뒤에는 방금 들은 한마디.
+     * 고마워요 결과가 있으면 그 단계로 보여준다(꽃을 드는 순간).
+     */
+    fun shownMates(): List<Shown> = when (phase) {
+        Phase.PROMPTING -> queue.map { Shown(it.id, it.stage) }
+        // 조용할 때: 방금 들은 길동무, 없으면 그다음에 만날 길동무를 미리 보여준다.
+        Phase.IDLE -> lastHeard?.let { listOf(Shown(it.id, lastThanks?.stage ?: it.stage)) }
+            ?: nextAhead().map { Shown(it.message.id, it.message.stage) }
+        else -> listOfNotNull(current?.let { Shown(it.id, lastThanks?.stage ?: it.stage) })
+    }
+
+    /** 카드의 작은 표시(언제·비·고마워요·들은 수)에 쓸 한마디. */
+    fun contextMessage(): NearbyMessage? = when (phase) {
+        Phase.PROMPTING -> queue.firstOrNull()
+        Phase.IDLE -> lastHeard ?: nextAhead().firstOrNull()?.message
+        else -> current
+    }
+
+    /** 지금 묻거나 듣는 묶음 다음에 만날 묶음(가장 가까운 한마디와 거기서 50m 안). */
+    fun nextAhead(): List<Approach> {
+        val now = queue.map { it.id }.toSet()
+        return policy.groupFrom(approaches.filter { it.message.id !in now })
+    }
+
+    fun trip() = Trip(met = met.size, heard = heardCount, thanked = thankedCount)
+
+    /** 듣는 중이면 0~1 진행 정도. 진행 막대에 쓴다(1초마다 칸만 바뀌는 막대라 주행 중에도 쓸 수 있다). */
+    fun progress(): Float? {
+        if (phase != Phase.PLAYING) return null
+        val total = current?.durationMs?.takeIf { it > 0 } ?: return null
+        return (audio.positionMs.toFloat() / total).coerceIn(0f, 1f)
+    }
+
+    /** 묶음을 듣는 중이면 (지금 차례, 모두). 한 개면 null. */
+    fun order(): Pair<Int, Int>? = if (queue.size > 1 && phase != Phase.IDLE && phase != Phase.PROMPTING) (index + 1) to queue.size else null
 
     fun release() {
         handler.removeCallbacks(promptTimeout)
@@ -208,10 +256,10 @@ class GuideController(
     private fun aheadLine(): String {
         if (!api.configured) return serverStatus
         if (drive?.heading == null) return "움직이기 시작하면 앞쪽 길을 살펴요"
-        if (approaches.isEmpty()) return "앞쪽 길에 남겨진 한마디가 없어요"
+        if (approaches.isEmpty()) return "앞쪽 길은 아직 조용해요"
         // 서버가 센 수에서, 조회 뒤에 지나쳤거나 이미 물어본 것만큼 뺀다.
         val count = (totalAhead - (messages.size - approaches.size)).coerceAtLeast(approaches.size)
-        return "앞쪽 길에 한마디가 ${count}개 있어요"
+        return "앞쪽 길에 길동무 ${count}명이 한마디를 남겼어요"
     }
 
     fun status(): Status {
@@ -222,7 +270,7 @@ class GuideController(
             Phase.PROMPTING -> {
                 val left = if (deadlineMs == 0L) ANSWER_TIMEOUT_MS / 1_000 else ((deadlineMs - clock()) / 1_000).coerceAtLeast(0)
                 val distance = drive?.let { d -> message?.let { Geo.distanceMeters(d.lat, d.lon, it.lat, it.lon).roundToInt() } }
-                val how = if (voiceReady) "\"응\"이나 \"넘겨\"라고 말해도 돼요" else "핸들 재생 버튼으로도 들어요"
+                val how = if (voiceReady) "\"응\"이나 \"지나가\"라고 말해도 돼요" else "핸들 재생 버튼으로도 들어요"
                 Status(
                     promptSentence(),
                     listOfNotNull(distance?.let { "앞쪽 ${it}m" }, message?.stage?.label?.takeIf { queue.size == 1 }, "${left}초", how)
@@ -231,9 +279,9 @@ class GuideController(
             }
             Phase.LOADING -> Status("한마디를 불러오는 중이에요", order.orEmpty())
             Phase.PLAYING -> Status(
-                "${message?.kind?.label} 한마디를 듣고 있어요",
+                "길동무의 ${kindWord(message)}를 듣고 있어요",
+                // 묶음 순서는 카드의 점(● ○ ○ 1/3)이 보여주므로 여기엔 넣지 않는다.
                 listOfNotNull(
-                    order,
                     "%.0f / %.0f초".format(Locale.KOREA, audio.positionMs / 1_000.0, (message?.durationMs ?: 0) / 1_000.0),
                     audio.state,
                 ).joinToString(" · "),
@@ -241,17 +289,26 @@ class GuideController(
             Phase.AFTER -> {
                 val thanked = lastThanks?.let { "고마워요 ${it.thanksCount}개 · " }.orEmpty()
                 Status(
-                    if (voiceReady) "좋았다면 \"고마워\"라고 말해 주세요" else "좋았다면 고마워요를 눌러 주세요",
-                    thanked + if (index + 1 < queue.size) "곧 다음 한마디를 들려 드려요 ($order)" else "곧 안내를 마쳐요",
+                    if (voiceReady) "좋았다면 \"고마워\"라고 해 주세요" else "좋았다면 고마워요를 눌러 주세요",
+                    thanked + "남긴 길동무에게 전해 드릴게요" + if (index + 1 < queue.size) " · 곧 다음 길동무 ($order)" else "",
                 )
             }
         }
     }
 
-    /** "인사 한마디가 있어요. 들을까요?" 또는 "앞쪽에 한마디가 6건 있어요. 들을까요?" */
-    private fun promptSentence(): String =
-        if (queue.size > 1) "앞쪽에 한마디가 ${queue.size}건 있어요. 들을까요?"
-        else "${current?.kind?.label} 한마디가 있어요. 들을까요?"
+    /** "길동무가 인사 한마디를 남겼어요. 들어 볼까요?" 또는 "이 자리에 길동무 6명이 한마디씩 남겼어요. 들어 볼까요?" */
+    private fun promptSentence(): String {
+        val message = current
+        return when {
+            queue.size > 1 -> "이 자리에 길동무 ${queue.size}명이 한마디씩 남겼어요. 들어 볼까요?"
+            message?.stage == Stage.FLOWER -> "꽃을 든 길동무가 ${kindWord(message)}를 남겼어요. 들어 볼까요?"
+            else -> "길동무가 ${kindWord(message)}를 남겼어요. 들어 볼까요?"
+        }
+    }
+
+    /** "인사 한마디", 종류를 모르면 그냥 "한마디". */
+    private fun kindWord(message: NearbyMessage?): String =
+        message?.kind?.takeIf { it != Kind.UNKNOWN }?.let { "${it.label} 한마디" } ?: "한마디"
 
     /**
      * 길 띠에 그릴 한마디: 지금 묻거나 틀고 있는 묶음과 앞쪽 후보를 가까운 순으로.
@@ -280,15 +337,27 @@ class GuideController(
         val next = if (wait != null) {
             "다음 안내는 %d분 %02d초 뒤부터예요".format(Locale.KOREA, wait / 60_000, wait / 1_000 % 60)
         } else {
-            "한마디에 10초 안에 닿으면 알려 드려요"
+            "길동무에게 10초 안에 닿으면 알려 드려요"
         }
         val thanks = lastThanks
+        val ahead = nextAhead()
+        val name = nickname()
         return when {
-            thanks?.stage == Stage.FLOWER -> Status("꽃이 피었어요!", "이 한마디에 고마워요가 ${thanks.thanksCount}개 모였어요")
-            thanks != null -> Status("고마워요를 남겼어요", "지금 ${thanks.thanksCount}개예요 · $next")
+            thanks?.stage == Stage.FLOWER -> Status("길동무가 꽃을 들었어요!", "이 한마디에 고마워요가 ${thanks.thanksCount}개 모였어요")
+            thanks != null -> Status("길동무에게 고마워요를 전했어요", "지금 ${thanks.thanksCount}개예요 · $next")
             lastHeard != null -> Status("방금 들은 한마디, 좋았나요?", "고마워요를 눌러 주세요 · $next")
+            // 앞쪽에 길동무가 있으면 미리 알려 준다.
+            ahead.isNotEmpty() -> Status("앞쪽 ${ahead.first().distanceM.roundToInt()}m에 ${whoAhead(ahead)} 있어요", next)
+            name != null && api.configured && drive?.heading != null -> Status("오늘도 안전 운전해요, ${name}님", "앞쪽 길은 아직 조용해요 · $next")
             else -> Status(aheadLine(), next)
         }
+    }
+
+    /** "길동무 6명이", "꽃을 든 길동무가", "길동무가" */
+    private fun whoAhead(group: List<Approach>): String = when {
+        group.size > 1 -> "길동무 ${group.size}명이"
+        group.first().message.stage == Stage.FLOWER -> "꽃을 든 길동무가"
+        else -> "길동무가"
     }
 
     private fun poll(state: DriveState) {
@@ -314,6 +383,7 @@ class GuideController(
 
     private fun refreshApproaches() {
         approaches = drive?.let { policy.approaches(messages, it, asked) } ?: emptyList()
+        met += approaches.map { it.message.id }
     }
 
     private fun prompt(group: List<Approach>) {
@@ -417,6 +487,7 @@ class GuideController(
     }
 
     private fun report(message: NearbyMessage, result: ListenResult, playedMs: Long) {
+        if (result == ListenResult.COMPLETED) heardCount++
         EventLog.add("재생", "${if (result == ListenResult.COMPLETED) "끝까지 들음" else "중간에 넘김"} (${playedMs}ms)")
         api.listen(message.id, result, playedMs) { sent ->
             sent.onFailure { EventLog.add("서버", "들은 결과를 보내지 못했어요: ${it.message}") }

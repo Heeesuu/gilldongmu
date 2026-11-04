@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"strings"
 	"testing"
+	"time"
 
 	"gildongmu/server/internal/handler"
 	ts "gildongmu/server/internal/testsupport"
@@ -28,7 +30,7 @@ type apiClient struct {
 
 func newAPI(t *testing.T) (*apiClient, *ts.Env) {
 	env := ts.NewEnv(t)
-	srv := httptest.NewServer(handler.NewRouter(handler.NewMessageHandler(env.Messages)))
+	srv := httptest.NewServer(handler.NewRouter(handler.NewMessageHandler(env.Messages), handler.NewProfileHandler(env.Profiles)))
 	t.Cleanup(srv.Close)
 	return &apiClient{t: t, srv: srv}, env
 }
@@ -202,5 +204,73 @@ func TestMessageLifecycle(t *testing.T) {
 	}
 	if resp, _ = api.do("GET", "/v1/messages/"+uploaded.ID+"/audio", author, nil, ""); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("지운 뒤 음성은 404여야 합니다: %d", resp.StatusCode)
+	}
+}
+
+// 내 길동무: 처음엔 null, 정하면 다음 변경 가능일까지 돌려준다. 30일 안에 바꾸면 409.
+func TestProfileEndpoints(t *testing.T) {
+	api, env := newAPI(t)
+
+	resp, data := api.do("GET", "/v1/me/profile", author, nil, "")
+	if resp.StatusCode != http.StatusOK || string(bytes.TrimSpace(data)) != `{"nickname":null,"look":null,"nickname_changed_at":null,"next_nickname_change_at":null}` {
+		t.Fatalf("처음에는 모두 null이어야 합니다: %d %s", resp.StatusCode, data)
+	}
+	put := func(body string) (*http.Response, []byte) {
+		return api.do("PUT", "/v1/me/profile", author, strings.NewReader(body), "application/json")
+	}
+	resp, data = put(`{"nickname":"느긋한 고라니","look":{"color":3,"item":"scarf"}}`)
+	var profile struct {
+		Nickname string `json:"nickname"`
+		Look     struct {
+			Color int    `json:"color"`
+			Item  string `json:"item"`
+		} `json:"look"`
+		Next time.Time `json:"next_nickname_change_at"`
+	}
+	_ = json.Unmarshal(data, &profile)
+	if resp.StatusCode != http.StatusOK || profile.Nickname != "느긋한 고라니" || profile.Look.Item != "scarf" || !profile.Next.Equal(env.Clock.Now().Add(30*24*time.Hour)) {
+		t.Fatalf("저장한 프로필을 돌려줘야 합니다: %d %s", resp.StatusCode, data)
+	}
+	if resp, data := put(`{"nickname":"씩씩한 수달","look":{"color":3,"item":"scarf"}}`); resp.StatusCode != http.StatusConflict || errorCode(t, data) != "NICKNAME_CHANGE_TOO_SOON" {
+		t.Errorf("30일 안에는 409여야 합니다: %d %s", resp.StatusCode, data)
+	}
+	if resp, data := put(`{"nickname":"씨발","look":{"color":0,"item":"none"}}`); resp.StatusCode != http.StatusBadRequest || errorCode(t, data) != "NICKNAME_NOT_ALLOWED" {
+		t.Errorf("비속어는 400 NICKNAME_NOT_ALLOWED여야 합니다: %d %s", resp.StatusCode, data)
+	}
+	if resp, _ := api.do("GET", "/v1/me/profile", listener, nil, ""); resp.StatusCode != http.StatusOK {
+		t.Errorf("다른 기기는 자기 프로필만 봅니다: %d", resp.StatusCode)
+	}
+}
+
+// 찾기 응답에 녹음 시각·와이퍼·전조등·들은 수가 실린다(카드의 작은 표시에 씀).
+func TestNearbyCarriesContext(t *testing.T) {
+	api, env := newAPI(t)
+	body, ct := uploadBody(t, "audio/ogg", `{"recorded_at":"2026-11-07T23:50:00Z","lat":37.5672,"lon":126.979,"heading":45,"speed_kmh":30,"duration_ms":6400,"wiper_on":true}`)
+	resp, data := api.do("POST", "/v1/messages", author, body, ct)
+	var uploaded struct{ ID string }
+	_ = json.Unmarshal(data, &uploaded)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("올리기 실패: %d %s", resp.StatusCode, data)
+	}
+	if err := env.Moderation.Moderate(context.Background(), uploaded.ID); err != nil {
+		t.Fatal(err)
+	}
+	near := fmt.Sprintf("/v1/messages/nearby?lat=%v&lon=%v&heading=45&speed_kmh=40", ts.BehindLat, ts.BehindLon)
+	_, data = api.do("GET", near, listener, nil, "")
+	var nearby struct {
+		Messages []struct {
+			RecordedAt  time.Time `json:"recorded_at"`
+			WiperOn     *bool     `json:"wiper_on"`
+			HeadlightOn *bool     `json:"headlight_on"`
+			ListenCount *int      `json:"listen_count"`
+		} `json:"messages"`
+	}
+	_ = json.Unmarshal(data, &nearby)
+	if len(nearby.Messages) != 1 {
+		t.Fatalf("한마디가 보여야 합니다: %s", data)
+	}
+	m := nearby.Messages[0]
+	if m.RecordedAt.IsZero() || m.WiperOn == nil || !*m.WiperOn || m.HeadlightOn != nil || m.ListenCount == nil {
+		t.Errorf("녹음 시각·와이퍼(켜짐)·전조등(모름=null)·들은 수가 있어야 합니다: %s", data)
 	}
 }
