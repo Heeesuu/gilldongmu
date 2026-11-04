@@ -13,6 +13,7 @@ import com.gildongmu.app.data.Stage
 import com.gildongmu.app.data.ThanksResult
 import com.gildongmu.app.drive.DriveState
 import com.gildongmu.app.drive.Geo
+import com.gildongmu.app.guide.AnswerWords.Answer
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -20,8 +21,9 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * 듣는 흐름 하나를 끝까지 이끈다: 앞쪽 한마디 조회 → "들을까요?" → 1개 재생 → 들은 결과 알리기.
- * 규칙은 docs/api.md 4장을 따르고, 판단은 [GuidePolicy], 소리는 [GuideAudio]에 맡긴다.
+ * 듣는 흐름 하나를 끝까지 이끈다: 앞쪽 한마디 조회 → "들을까요?" → 묶음 차례로 재생 → 들은 결과 알리기.
+ * 가까이 모인 한마디는 한 번에 묻고(GuidePolicy.pickPrompt), 대답은 버튼·핸들 버튼·말로 받는다.
+ * 규칙은 docs/api.md 4장을 따르고, 판단은 [GuidePolicy], 소리는 [GuideAudio], 말은 [VoiceAnswer]에 맡긴다.
  * 모든 메서드는 메인 스레드에서 부른다.
  */
 class GuideController(
@@ -33,8 +35,11 @@ class GuideController(
     private val canPrompt: () -> Boolean = { true },
     /** 비속어 필터 설정. 조회할 때마다 읽는다. */
     private val filterOn: () -> Boolean = { true },
+    /** 말로 대답하기 설정과 마이크 권한. 물을 때마다 읽는다. */
+    private val voiceOn: () -> Boolean = { false },
 ) {
-    enum class Phase { IDLE, PROMPTING, LOADING, PLAYING }
+    /** AFTER: 한마디 하나를 듣고 난 뒤 "고마워"를 기다리는 몇 초. */
+    enum class Phase { IDLE, PROMPTING, LOADING, PLAYING, AFTER }
 
     /** 안내 카드의 큰 글자 한 줄과 작은 글자 한 줄. 주행 중에 1~2초 안에 읽히도록 짧게 쓴다. */
     data class Status(val title: String, val detail: String)
@@ -42,12 +47,15 @@ class GuideController(
     private val handler = Handler(Looper.getMainLooper())
     private val audio = GuideAudio(context) { onFocusLost() }
     private val keys = SteeringKeys(context) { onKey(it) }
+    private val voice = VoiceAnswer(context)
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.KOREA)
 
     var phase = Phase.IDLE
         private set
-    /** 지금 묻거나 틀고 있는 한마디. */
-    private var current: NearbyMessage? = null
+    /** 이번에 묻거나 들려주는 한마디 묶음(닿는 순서)과 지금 차례. */
+    private var queue: List<NearbyMessage> = emptyList()
+    private var index = 0
+    private val current: NearbyMessage? get() = queue.getOrNull(index)
     /** 방금 들은 한마디. 고마워요는 이 한마디에 남긴다. */
     var lastHeard: NearbyMessage? = null
         private set
@@ -64,7 +72,8 @@ class GuideController(
     private var nextPollSec = 10
     private var polling = false
     private var lastPromptAtMs: Long? = null
-    private var promptDeadlineMs = 0L
+    /** 대답을 기다리는 마감 시각. 안내 문장을 다 읽은 뒤부터 센다. 0이면 아직 읽는 중이다. */
+    private var deadlineMs = 0L
     /** 이번 주행에서 이미 물어본 한마디. 대답이 없었거나 넘긴 것도 다시 묻지 않는다. */
     private val asked = mutableSetOf<String>()
 
@@ -72,68 +81,103 @@ class GuideController(
         EventLog.add("안내", "${ANSWER_TIMEOUT_MS / 1_000}초 동안 대답이 없어 넘어가요")
         endSession()
     }
+    private val afterTimeout = Runnable { next() }
+
+    /** 이번 안내에서 말로 대답할 수 있는가. 화면 문구에 쓴다. */
+    val voiceReady: Boolean get() = voice.usable && voiceOn()
+
+    /** 고마워요를 남길 한마디가 있는가: 듣고 있거나 방금 들었다. */
+    val canThank: Boolean get() = phase == Phase.PLAYING || phase == Phase.AFTER || (phase == Phase.IDLE && lastHeard != null)
+
+    /** 묶음에 아직 들을 한마디가 남았는가. "다음" 버튼에 쓴다. */
+    val hasNext: Boolean get() = phase != Phase.IDLE && phase != Phase.PROMPTING && index + 1 < queue.size
 
     fun onDrive(state: DriveState) {
         drive = state
         if (api.configured && !polling && policy.shouldPoll(lastPoll, state, clock(), nextPollSec)) poll(state)
         refreshApproaches()
-        if (phase == Phase.IDLE && canPrompt()) policy.pickPrompt(approaches, clock(), lastPromptAtMs)?.let { prompt(it) }
+        if (phase == Phase.IDLE && canPrompt()) {
+            policy.pickPrompt(approaches, clock(), lastPromptAtMs).takeIf { it.isNotEmpty() }?.let { prompt(it) }
+        }
     }
 
+    /** 묻는 중: 재생 버튼은 듣기, 다음 곡 버튼은 넘기기. 듣는 중: 다음 곡 버튼은 다음 한마디, 재생 버튼은 그만 듣기. */
     fun onKey(key: SteeringKeys.Key) {
         when (phase) {
             Phase.PROMPTING -> if (key == SteeringKeys.Key.PLAY) accept() else skip()
-            Phase.LOADING, Phase.PLAYING -> skip()
+            Phase.LOADING, Phase.PLAYING, Phase.AFTER -> if (key == SteeringKeys.Key.NEXT) skip() else stop()
             Phase.IDLE -> Unit
         }
+    }
+
+    /**
+     * Gleo로 "길동무 들려 줘"라고 했을 때: 묻는 중이면 듣기, 조용할 때는 가장 가까운 묶음을 묻지 않고 바로 튼다.
+     * 운전자가 먼저 청했으므로 안내 간격(5분)은 따지지 않는다. 틀기 시작했으면 true.
+     */
+    fun listenNow(): Boolean {
+        if (phase == Phase.PROMPTING) {
+            accept()
+            return true
+        }
+        if (phase != Phase.IDLE || !canPrompt()) return false
+        val group = policy.groupFrom(approaches)
+        if (group.isEmpty() || !audio.begin()) return false
+        asked += group.map { it.message.id }
+        refreshApproaches()
+        queue = group.map { it.message }
+        index = 0
+        lastHeard = null
+        lastThanks = null
+        lastPromptAtMs = clock()
+        keys.activate()
+        EventLog.add("안내", "Gleo 요청으로 바로 들려 드려요 · ${queue.size}건")
+        playAt(0)
+        return true
     }
 
     fun accept() {
-        val message = current ?: return
         if (phase != Phase.PROMPTING) return
         handler.removeCallbacks(promptTimeout)
-        phase = Phase.LOADING
+        voice.stop()
         EventLog.add("안내", "듣기")
-        // 음성은 바뀌지 않으므로(Cache-Control) 한 번 받은 파일은 다시 받지 않는다.
-        val file = File(context.cacheDir, "messages/${message.id}.ogg")
-        if (file.exists()) {
-            play(message, file)
-            return
-        }
-        api.audio(message.audioUrl) { result ->
-            if (phase != Phase.LOADING || current?.id != message.id) return@audio
-            result.onSuccess { bytes ->
-                file.parentFile?.mkdirs()
-                file.writeBytes(bytes)
-                play(message, file)
-            }.onFailure {
-                EventLog.add("재생", "음성을 받지 못했어요: ${it.message}")
-                endSession()
-            }
-        }
+        playAt(0)
     }
 
-    /** 묻는 중이면 '안 들을게요'(listen은 보내지 않음), 재생 중이면 중간에 넘기기. */
+    /** 묻는 중이면 '안 들을게요'(listen은 보내지 않음), 듣는 중이면 이 한마디를 넘기고 다음 한마디로. */
     fun skip() {
         when (phase) {
-            Phase.PROMPTING, Phase.LOADING -> {
+            Phase.PROMPTING -> {
                 EventLog.add("안내", "넘기기")
                 endSession()
             }
+            Phase.LOADING -> next()
             Phase.PLAYING -> {
                 val message = current ?: return
-                val playedMs = audio.stop()
-                report(message, ListenResult.SKIPPED, playedMs)
+                report(message, ListenResult.SKIPPED, audio.stop())
                 lastHeard = message
                 lastThanks = null
-                endSession()
+                next()
             }
+            Phase.AFTER -> next()
             Phase.IDLE -> Unit
         }
     }
 
+    /** 묶음의 남은 한마디까지 모두 그만 듣는다. 틀고 있던 한마디는 넘긴 것으로 알린다. */
+    fun stop() {
+        if (phase == Phase.PLAYING) {
+            current?.let { message ->
+                report(message, ListenResult.SKIPPED, audio.stop())
+                lastHeard = message
+                lastThanks = null
+            }
+        }
+        EventLog.add("안내", "그만 듣기")
+        endSession()
+    }
+
     fun thanks() {
-        val message = lastHeard ?: current?.takeIf { phase == Phase.PLAYING } ?: return
+        val message = current?.takeIf { phase == Phase.PLAYING || phase == Phase.AFTER } ?: lastHeard ?: return
         api.thanks(message.id) { result ->
             result.onSuccess {
                 lastThanks = it
@@ -153,7 +197,9 @@ class GuideController(
 
     fun release() {
         handler.removeCallbacks(promptTimeout)
-        audio.end()
+        handler.removeCallbacks(afterTimeout)
+        voice.release()
+        audio.release()
         keys.release()
         api.shutdown()
     }
@@ -170,43 +216,64 @@ class GuideController(
 
     fun status(): Status {
         val message = current
+        val order = if (queue.size > 1) "${index + 1}/${queue.size}" else null
         return when (phase) {
             Phase.IDLE -> idleStatus()
             Phase.PROMPTING -> {
-                val left = ((promptDeadlineMs - clock()) / 1_000).coerceAtLeast(0)
+                val left = if (deadlineMs == 0L) ANSWER_TIMEOUT_MS / 1_000 else ((deadlineMs - clock()) / 1_000).coerceAtLeast(0)
                 val distance = drive?.let { d -> message?.let { Geo.distanceMeters(d.lat, d.lon, it.lat, it.lon).roundToInt() } }
+                val how = if (voiceReady) "\"응\"이나 \"넘겨\"라고 말해도 돼요" else "핸들 재생 버튼으로도 들어요"
                 Status(
-                    "${message?.kind?.label} 한마디가 있어요. 들을까요?",
-                    listOfNotNull(distance?.let { "앞쪽 ${it}m" }, message?.stage?.label, "${left}초", "핸들 재생 버튼으로도 들어요")
+                    promptSentence(),
+                    listOfNotNull(distance?.let { "앞쪽 ${it}m" }, message?.stage?.label?.takeIf { queue.size == 1 }, "${left}초", how)
                         .joinToString(" · "),
                 )
             }
-            Phase.LOADING -> Status("한마디를 불러오는 중이에요", "")
+            Phase.LOADING -> Status("한마디를 불러오는 중이에요", order.orEmpty())
             Phase.PLAYING -> Status(
                 "${message?.kind?.label} 한마디를 듣고 있어요",
-                "%.0f / %.0f초 · %s".format(
-                    Locale.KOREA, audio.positionMs / 1_000.0, (message?.durationMs ?: 0) / 1_000.0, audio.state,
-                ),
+                listOfNotNull(
+                    order,
+                    "%.0f / %.0f초".format(Locale.KOREA, audio.positionMs / 1_000.0, (message?.durationMs ?: 0) / 1_000.0),
+                    audio.state,
+                ).joinToString(" · "),
             )
+            Phase.AFTER -> {
+                val thanked = lastThanks?.let { "고마워요 ${it.thanksCount}개 · " }.orEmpty()
+                Status(
+                    if (voiceReady) "좋았다면 \"고마워\"라고 말해 주세요" else "좋았다면 고마워요를 눌러 주세요",
+                    thanked + if (index + 1 < queue.size) "곧 다음 한마디를 들려 드려요 ($order)" else "곧 안내를 마쳐요",
+                )
+            }
         }
     }
 
+    /** "인사 한마디가 있어요. 들을까요?" 또는 "앞쪽에 한마디가 6건 있어요. 들을까요?" */
+    private fun promptSentence(): String =
+        if (queue.size > 1) "앞쪽에 한마디가 ${queue.size}건 있어요. 들을까요?"
+        else "${current?.kind?.label} 한마디가 있어요. 들을까요?"
+
     /**
-     * 길 띠에 그릴 한마디: 지금 묻거나 틀고 있는 한마디와 앞쪽 후보를 가까운 순으로.
-     * 지금 한마디를 막 지나쳤으면 차 바로 앞(0m)에 둔다.
+     * 길 띠에 그릴 한마디: 지금 묻거나 틀고 있는 묶음과 앞쪽 후보를 가까운 순으로.
+     * 묶음 안의 한마디를 이미 지나쳤으면 차 바로 앞(0m)에 둔다.
      */
     fun shownAhead(): List<Approach> {
         val d = drive ?: return emptyList()
-        val now = current?.let { m ->
+        val now = queue.drop(index).map { m ->
             val heading = d.heading
             val passed = heading != null && Geo.angleDiff(Geo.bearing(d.lat, d.lon, m.lat, m.lon), heading) > 90
             Approach(m, if (passed) 0.0 else Geo.distanceMeters(d.lat, d.lon, m.lat, m.lon), etaSec = null)
         }
-        return (listOfNotNull(now) + approaches.filter { it.message.id != now?.message?.id }).sortedBy { it.distanceM }
+        val ids = now.map { it.message.id }.toSet()
+        return (now + approaches.filter { it.message.id !in ids }).sortedBy { it.distanceM }
     }
 
-    /** 지금 묻거나 틀고 있는 한마디의 id. 길 띠에서 강조한다. */
-    val currentId: String? get() = current?.id
+    /** 지금 묻거나 틀고 있는 한마디의 id. 길 띠에서 강조한다. 묻는 중에는 묶음 전체를 강조한다. */
+    fun isHighlighted(id: String): Boolean = when (phase) {
+        Phase.IDLE -> false
+        Phase.PROMPTING -> queue.any { it.id == id }
+        else -> current?.id == id
+    }
 
     private fun idleStatus(): Status {
         val wait = lastPromptAtMs?.let { policy.promptIntervalMs - (clock() - it) }?.takeIf { it > 0 }
@@ -228,7 +295,8 @@ class GuideController(
         val heading = state.heading ?: return
         polling = true
         lastPoll = GuidePolicy.PollMark(state.lat, state.lon, clock())
-        api.nearby(NearbyQuery(state.lat, state.lon, heading, state.speedKmh, filterOn())) { result ->
+        // 모여 있는 한마디를 한 번에 묻기 위해 서버가 주는 만큼(최대 10개) 받는다.
+        api.nearby(NearbyQuery(state.lat, state.lon, heading, state.speedKmh, filterOn(), limit = NEARBY_LIMIT)) { result ->
             polling = false
             result.onSuccess {
                 if (it.totalAhead != totalAhead) EventLog.add("서버", "앞쪽 한마디 ${it.totalAhead}개")
@@ -248,24 +316,67 @@ class GuideController(
         approaches = drive?.let { policy.approaches(messages, it, asked) } ?: emptyList()
     }
 
-    private fun prompt(approach: Approach) {
-        val message = approach.message
-        asked += message.id
+    private fun prompt(group: List<Approach>) {
+        asked += group.map { it.message.id }
         refreshApproaches()
         if (!audio.begin()) {
             EventLog.add("안내", "오디오 포커스를 못 받아 이번 한마디는 건너뛰어요")
             return
         }
         phase = Phase.PROMPTING
-        current = message
+        queue = group.map { it.message }
+        index = 0
         lastHeard = null
         lastThanks = null
         lastPromptAtMs = clock()
-        promptDeadlineMs = clock() + ANSWER_TIMEOUT_MS
+        deadlineMs = 0L
         keys.activate()
         audio.chime()
+        val sentence = promptSentence()
+        EventLog.add("안내", "앞쪽 ${group.first().distanceM.roundToInt()}m · $sentence")
+        // 알림음이 끝난 뒤 문장을 읽고, 다 읽은 뒤부터 대답을 기다린다(내 TTS를 대답으로 듣지 않도록).
+        handler.postDelayed({
+            if (phase == Phase.PROMPTING) audio.speak(sentence) { waitForAnswer() }
+        }, CHIME_MS)
+    }
+
+    private fun waitForAnswer() {
+        if (phase != Phase.PROMPTING) return
+        deadlineMs = clock() + ANSWER_TIMEOUT_MS
         handler.postDelayed(promptTimeout, ANSWER_TIMEOUT_MS)
-        EventLog.add("안내", "앞쪽 ${approach.distanceM.roundToInt()}m에 ${message.kind.label} 한마디가 있어요. 들을까요?")
+        if (!voiceReady) return
+        voice.listen(ANSWER_TIMEOUT_MS) { answer, _ ->
+            when (answer) {
+                Answer.LISTEN -> accept()
+                Answer.SKIP, Answer.STOP -> skip()
+                // 묻는 중의 "고마워"는 뜻이 모호하니 듣지 않은 것으로 보고 계속 기다린다.
+                Answer.THANKS -> return@listen false
+            }
+            true
+        }
+    }
+
+    private fun playAt(i: Int) {
+        index = i
+        val message = current ?: return endSession()
+        phase = Phase.LOADING
+        // 음성은 바뀌지 않으므로(Cache-Control) 한 번 받은 파일은 다시 받지 않는다.
+        val file = File(context.cacheDir, "messages/${message.id}.ogg")
+        if (file.exists()) {
+            play(message, file)
+            return
+        }
+        api.audio(message.audioUrl) { result ->
+            if (phase != Phase.LOADING || current?.id != message.id) return@audio
+            result.onSuccess { bytes ->
+                file.parentFile?.mkdirs()
+                file.writeBytes(bytes)
+                play(message, file)
+            }.onFailure {
+                EventLog.add("재생", "음성을 받지 못했어요: ${it.message}")
+                next()
+            }
+        }
     }
 
     private fun play(message: NearbyMessage, file: File) {
@@ -276,8 +387,33 @@ class GuideController(
             report(message, if (completed) ListenResult.COMPLETED else ListenResult.SKIPPED, playedMs)
             lastHeard = message
             lastThanks = null
-            endSession()
+            afterMessage()
         }
+    }
+
+    /** 한마디 하나를 다 들은 뒤 잠깐 "고마워"를 기다린다. 재생 중에는 한마디 소리를 대답으로 잘못 들을 수 있어 듣지 않는다. */
+    private fun afterMessage() {
+        phase = Phase.AFTER
+        handler.postDelayed(afterTimeout, AFTER_MS)
+        if (!voiceReady) return
+        voice.listen(AFTER_MS) { answer, _ ->
+            when (answer) {
+                Answer.THANKS -> {
+                    thanks()
+                    next()
+                }
+                Answer.SKIP, Answer.LISTEN -> next()
+                Answer.STOP -> stop()
+            }
+            true
+        }
+    }
+
+    /** 묶음의 다음 한마디로. 남은 게 없으면 안내를 마친다. */
+    private fun next() {
+        handler.removeCallbacks(afterTimeout)
+        voice.stop()
+        if (index + 1 < queue.size) playAt(index + 1) else endSession()
     }
 
     private fun report(message: NearbyMessage, result: ListenResult, playedMs: Long) {
@@ -288,19 +424,26 @@ class GuideController(
     }
 
     private fun onFocusLost() {
-        if (phase == Phase.PLAYING) skip() else endSession()
+        stop()
     }
 
     private fun endSession() {
         handler.removeCallbacks(promptTimeout)
+        handler.removeCallbacks(afterTimeout)
+        voice.stop()
         audio.end()
         keys.deactivate()
         phase = Phase.IDLE
-        current = null
+        // 마지막에 들은 한마디는 lastHeard로 남기고 묶음은 비운다.
+        queue = emptyList()
+        index = 0
     }
 
     companion object {
         private const val ANSWER_TIMEOUT_MS = 8_000L
+        private const val AFTER_MS = 4_000L
+        private const val CHIME_MS = 500L
         private const val MAX_MESSAGE_MS = 15_000L
+        private const val NEARBY_LIMIT = 10
     }
 }

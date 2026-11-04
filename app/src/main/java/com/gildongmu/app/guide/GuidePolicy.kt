@@ -16,6 +16,8 @@ class GuidePolicy(
     private val pollDistanceM: Double = 100.0,
     private val promptEtaSec: Int = 10,
     val promptIntervalMs: Long = 5 * 60_000L,
+    /** 이 거리 안에 모인 한마디는 한 번에 묻는다. GPS 오차(10m 안팎)보다 넉넉하고, 시속 40km로 5초 안쪽이다. */
+    private val groupRadiusM: Double = 50.0,
 ) {
     data class PollMark(val lat: Double, val lon: Double, val timeMs: Long)
 
@@ -43,13 +45,25 @@ class GuidePolicy(
         }
     }
 
-    /** 첫 번째 한마디에 10초 안에 닿고, 마지막 안내에서 5분이 지났으면 그 한마디를 고른다. */
-    fun pickPrompt(approaches: List<Approach>, nowMs: Long, lastPromptAtMs: Long?): Approach? {
-        val first = approaches.firstOrNull() ?: return null
-        val eta = first.etaSec ?: return null
-        if (eta > promptEtaSec) return null
-        if (lastPromptAtMs != null && nowMs - lastPromptAtMs < promptIntervalMs) return null
-        return first
+    /**
+     * 가장 먼저 닿는(가장 가까운) 한마디에 10초 안에 닿고, 마지막 안내에서 5분이 지났으면 묻는다.
+     * 그 한마디에서 50m 안에 모인 한마디도 함께 묶어 한 번에 묻는다 ("앞쪽에 한마디가 6건 있어요. 들을까요?").
+     * 닿는 순서(가까운 순)로 돌려주고, 물을 게 없으면 빈 목록이다.
+     */
+    fun pickPrompt(approaches: List<Approach>, nowMs: Long, lastPromptAtMs: Long?): List<Approach> {
+        val first = approaches.minByOrNull { it.distanceM } ?: return emptyList()
+        val eta = first.etaSec ?: return emptyList()
+        if (eta > promptEtaSec) return emptyList()
+        if (lastPromptAtMs != null && nowMs - lastPromptAtMs < promptIntervalMs) return emptyList()
+        return groupFrom(approaches)
+    }
+
+    /** 가장 가까운 한마디와, 거기서 50m 안에 모인 한마디. 닿는 순서로. Gleo로 "들려 줘"라고 할 때도 쓴다. */
+    fun groupFrom(approaches: List<Approach>): List<Approach> {
+        val first = approaches.minByOrNull { it.distanceM } ?: return emptyList()
+        return approaches
+            .filter { Geo.distanceMeters(first.message.lat, first.message.lon, it.message.lat, it.message.lon) <= groupRadiusM }
+            .sortedBy { it.distanceM }
     }
 
     companion object {

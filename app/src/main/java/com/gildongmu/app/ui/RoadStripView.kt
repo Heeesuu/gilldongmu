@@ -58,6 +58,12 @@ class RoadStripView(context: Context) : View(context) {
         Stage.FLOWER to context.getColor(R.color.gd_stage_flower),
         Stage.MEMORY to context.getColor(R.color.gd_stage_memory),
     )
+    private val badgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = context.getColor(R.color.gd_text) }
+    private val badgeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = context.getColor(R.color.gd_bg)
+        textSize = 18f * scaled
+        typeface = Typeface.create(Typeface.DEFAULT, 500, false)
+    }
     private val stageIcons = Stage.entries.associateWith { context.getDrawable(StageIcon.of(it))!! }
     private val highlightColor = context.getColor(R.color.gd_highlight)
     private val rect = RectF()
@@ -95,39 +101,54 @@ class RoadStripView(context: Context) : View(context) {
         val end = if (vertical) dp(44f) else w - dp(44f)
         fun along(distanceM: Int) = start + (end - start) * (distanceM.coerceIn(0, LOOKAHEAD_M) / LOOKAHEAD_M.toFloat())
 
-        // 먼 것부터 그려서 가까운(곧 닿을) 한마디가 위에 오게 한다. 글자가 겹치면 먼 쪽 글자는 뺀다.
-        var lastLabelAt: Float? = null
-        pins.sortedBy { it.distanceM }.let { near ->
-            val labelled = near.filter { pin ->
-                val at = along(pin.distanceM)
-                val show = lastLabelAt?.let { abs(it - at) >= dp(40f) } ?: true
-                if (show) lastLabelAt = at
-                show || pin.highlighted
-            }.map { it.id }.toSet()
-            near.reversed().forEach { pin ->
-                val at = along(pin.distanceM)
-                val (x, y) = if (vertical) w * 0.36f to at else at to h * 0.40f
-                drawPin(canvas, pin, x, y)
-                if (pin.id in labelled) drawLabel(canvas, pin, x, y, road, vertical)
-            }
+        // 화면에서 겹칠 만큼 가까운 한마디는 하나로 모아 가장 가까운 것만 그리고 개수를 붙인다.
+        // 먼 묶음부터 그려서 가까운(곧 닿을) 묶음이 위에 온다.
+        clusters(pins.sortedBy { it.distanceM }) { along(it.distanceM) }.reversed().forEach { group ->
+            val pin = group.first()
+            val at = along(pin.distanceM)
+            val (x, y) = if (vertical) w * 0.36f to at else at to h * 0.40f
+            val highlighted = group.any { it.highlighted }
+            drawPin(canvas, pin.stage, highlighted, x, y, group.size)
+            drawLabel(canvas, if (group.size > 1) "${pin.distanceM}m · ${group.size}건" else "${pin.distanceM}m", highlighted, x, y, road, vertical)
         }
     }
 
-    private fun drawPin(canvas: Canvas, pin: Pin, x: Float, y: Float) {
-        val radius = dp(if (pin.highlighted) 38f else 30f)
+    /**
+     * 가까운 순으로 정렬된 핀을 묶는다. 앞 묶음의 첫 핀에서 50m 안이면(한 번에 묻는 기준, GuidePolicy와 같음)
+     * 또는 화면에서 겹칠 만큼(`CLUSTER_DP`) 가까우면 같은 묶음이다.
+     */
+    private fun clusters(sorted: List<Pin>, position: (Pin) -> Float): List<List<Pin>> {
+        val groups = mutableListOf<MutableList<Pin>>()
+        sorted.forEach { pin ->
+            val first = groups.lastOrNull()?.first()
+            val together = first != null &&
+                (pin.distanceM - first.distanceM <= GROUP_M || abs(position(first) - position(pin)) < dp(CLUSTER_DP))
+            if (together) groups.last() += pin else groups += mutableListOf(pin)
+        }
+        return groups
+    }
+
+    private fun drawPin(canvas: Canvas, stage: Stage, highlighted: Boolean, x: Float, y: Float, count: Int) {
+        val radius = dp(if (highlighted) 38f else 30f)
         canvas.drawCircle(x, y, radius, pinPaint)
-        ringPaint.color = if (pin.highlighted) highlightColor else stageColors.getValue(pin.stage)
-        ringPaint.strokeWidth = dp(if (pin.highlighted) 7f else 5f)
+        ringPaint.color = if (highlighted) highlightColor else stageColors.getValue(stage)
+        ringPaint.strokeWidth = dp(if (highlighted) 7f else 5f)
         canvas.drawCircle(x, y, radius, ringPaint)
-        val icon = stageIcons.getValue(pin.stage)
+        val icon = stageIcons.getValue(stage)
         val half = (radius * 0.72f).toInt()
         icon.setBounds(x.toInt() - half, y.toInt() - half, x.toInt() + half, y.toInt() + half)
         icon.draw(canvas)
+        if (count > 1) {
+            // 오른쪽 위에 개수 배지
+            val bx = x + radius * 0.75f
+            val by = y - radius * 0.75f
+            canvas.drawCircle(bx, by, dp(16f), badgePaint)
+            canvas.drawText("$count", bx - badgeTextPaint.measureText("$count") / 2, by + badgeTextPaint.textSize * 0.36f, badgeTextPaint)
+        }
     }
 
-    private fun drawLabel(canvas: Canvas, pin: Pin, x: Float, y: Float, road: Float, vertical: Boolean) {
-        val paint = if (pin.highlighted) strongLabelPaint else labelPaint
-        val text = "${pin.distanceM}m"
+    private fun drawLabel(canvas: Canvas, text: String, highlighted: Boolean, x: Float, y: Float, road: Float, vertical: Boolean) {
+        val paint = if (highlighted) strongLabelPaint else labelPaint
         if (vertical) {
             canvas.drawText(text, x + road / 2 + dp(14f), y + paint.textSize * 0.35f, paint)
         } else {
@@ -143,5 +164,7 @@ class RoadStripView(context: Context) : View(context) {
 
     companion object {
         const val LOOKAHEAD_M = 600
+        private const val CLUSTER_DP = 56f
+        private const val GROUP_M = 50
     }
 }
