@@ -1,4 +1,4 @@
-package com.gildongmu.app
+package com.gildongmu.app.check
 
 import android.content.Context
 import android.content.Intent
@@ -6,6 +6,7 @@ import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
 import android.view.KeyEvent
+import com.gildongmu.app.EventLog
 
 /**
  * 확인 항목: 핸들(스티어링 휠) 버튼이 앱에 들어오는지.

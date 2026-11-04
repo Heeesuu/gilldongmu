@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 개발용 빌드에만 들어가는 에뮬레이터 확인 화면. 제출용 release APK에는 포함되지 않는다. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- 길동무 본 화면과 따로 열리도록 작업(task)을 분리한다. -->
+        <activity
+            android:name=".check.CheckActivity"
+            android:exported="true"
+            android:icon="@android:drawable/ic_menu_manage"
+            android:label="@string/check_app_name"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.gildongmu.app.check">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- 주행 중에도 화면을 띄울 수 있다고 선언(DO) -->
+            <meta-data
+                android:name="distractionOptimized"
+                android:value="true" />
+        </activity>
+
+        <service
+            android:name=".check.BackgroundCheckService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+    </application>
+</manifest>

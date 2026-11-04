@@ -4,7 +4,6 @@ import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.graphics.Typeface
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -14,50 +13,53 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.gildongmu.app.data.DeviceId
+import com.gildongmu.app.data.ServerApi
+import com.gildongmu.app.drive.DriveTracker
+import com.gildongmu.app.guide.GuideController
+import com.gildongmu.app.guide.SteeringKeys
 
 /**
- * 기획서에 '에뮬레이터 검증 예정'으로 적은 항목을 한 화면에서 점검하는 테스트 화면.
- * 결과는 화면과 Logcat(태그: Gildongmu)에 함께 남는다.
+ * 길동무 본 화면 (MVP 1단계: 듣기).
+ * 주행 중에도 띄울 수 있도록(DO) 글자 입력과 애니메이션 없이 큰 글씨와 버튼만 쓴다.
+ * 녹음·꽃 아이콘·주행/정차 화면 전환은 다음 단계에서 붙인다.
  */
 class MainActivity : Activity() {
 
     private val ui = Handler(Looper.getMainLooper())
 
-    private lateinit var pleosCheck: PleosCheck
-    private lateinit var locationCheck: LocationCheck
-    private lateinit var carCheck: CarCheck
-    private lateinit var mediaKeyCheck: MediaKeyCheck
-    private lateinit var audioCheck: AudioCheck
+    private lateinit var guide: GuideController
+    private lateinit var tracker: DriveTracker
 
-    private lateinit var pleosText: TextView
-    private lateinit var locationText: TextView
-    private lateinit var carText: TextView
-    private lateinit var backgroundText: TextView
-    private lateinit var audioText: TextView
-    private lateinit var keyText: TextView
+    private lateinit var driveText: TextView
+    private lateinit var aheadText: TextView
+    private lateinit var guideText: TextView
+    private lateinit var serverText: TextView
     private lateinit var logText: TextView
+    private lateinit var listenButton: Button
+    private lateinit var skipButton: Button
+    private lateinit var thanksButton: Button
 
     private val refresh = object : Runnable {
         override fun run() {
             render()
-            ui.postDelayed(this, 1_000L)
+            ui.postDelayed(this, 500L)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        pleosCheck = PleosCheck(this)
-        locationCheck = LocationCheck(this)
-        carCheck = CarCheck(this)
-        mediaKeyCheck = MediaKeyCheck(this)
-        audioCheck = AudioCheck(this) { playing -> mediaKeyCheck.setPlaying(playing) }
+        val api = ServerApi(BuildConfig.SERVER_URL, DeviceId.get(this), BuildConfig.VERSION_NAME)
+        guide = GuideController(this, api)
+        tracker = DriveTracker(this) { guide.onDrive(it) }
 
         setContentView(buildLayout())
-        EventLog.add("앱", "확인 화면 시작")
-        pleosCheck.start()
-        carCheck.connect()
-        mediaKeyCheck.start()
-        requestNeededPermissions()
+        EventLog.add("앱", "길동무 시작 · 서버 ${BuildConfig.SERVER_URL.ifEmpty { "(미설정)" }}")
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            tracker.start()
+        } else {
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), REQUEST_LOCATION)
+        }
     }
 
     override fun onResume() {
@@ -71,17 +73,15 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        audioCheck.stopAll()
-        locationCheck.stop()
-        carCheck.disconnect()
-        mediaKeyCheck.release()
-        pleosCheck.stop()
+        tracker.stop()
+        guide.release()
         super.onDestroy()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        mediaKeyCheck.record("화면 키 입력", keyCode)
-        return super.onKeyDown(keyCode, event)
+        val key = SteeringKeys.keyOf(keyCode) ?: return super.onKeyDown(keyCode, event)
+        guide.onKey(key)
+        return true
     }
 
     @Deprecated("Deprecated in Java")
@@ -92,41 +92,23 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        permissions.forEachIndexed { i, permission ->
-            val granted = grantResults.getOrNull(i) == PackageManager.PERMISSION_GRANTED
-            EventLog.add("권한", "${permission.substringAfterLast('.')} → ${if (granted) "허용" else "거부"}")
+        if (requestCode == REQUEST_LOCATION && !tracker.start()) {
+            EventLog.add("권한", "위치 권한이 있어야 앞쪽 한마디를 찾을 수 있어요")
         }
-        onPermissionsReady()
-    }
-
-    private fun requestNeededPermissions() {
-        val wanted = buildList {
-            add(Manifest.permission.ACCESS_FINE_LOCATION)
-            add(Manifest.permission.ACCESS_COARSE_LOCATION)
-            add(PERMISSION_CAR_SPEED)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
-        }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-
-        if (wanted.isEmpty()) {
-            onPermissionsReady()
-        } else {
-            requestPermissions(wanted.toTypedArray(), REQUEST_PERMISSIONS)
-        }
-    }
-
-    private fun onPermissionsReady() {
-        locationCheck.start()
-        carCheck.subscribe()
     }
 
     private fun render() {
-        pleosText.text = pleosCheck.summary()
-        locationText.text = locationCheck.summary
-        carText.text = carCheck.summary()
-        backgroundText.text = BackgroundCheckService.summary()
-        audioText.text = audioCheck.summary()
-        keyText.text = mediaKeyCheck.summary
+        driveText.text = tracker.latest?.let(DriveTracker::describe) ?: "GPS 위치를 기다리는 중"
+        aheadText.text = guide.aheadSummary()
+        guideText.text = guide.statusText()
+        serverText.text = guide.serverStatus
         logText.text = EventLog.recent()
+
+        val phase = guide.phase
+        listenButton.isEnabled = phase == GuideController.Phase.PROMPTING
+        skipButton.isEnabled = phase != GuideController.Phase.IDLE
+        thanksButton.isEnabled = guide.lastHeard != null || phase == GuideController.Phase.PLAYING
+        thanksButton.text = guide.lastThanks?.let { "고마워요 ${it.thanksCount} · ${it.stage.label}" } ?: "고마워요"
     }
 
     private fun buildLayout(): View {
@@ -134,65 +116,38 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(32), dp(24), dp(32), dp(48))
         }
-        column.addView(text("길동무 에뮬레이터 확인", 30f, bold = true))
-        column.addView(text("결과는 Logcat 태그 'Gildongmu'에도 남습니다.", 16f))
+        column.addView(text("길동무", 34f, bold = true))
+        column.addView(text("길 위의 방명록 · 같은 길을 가는 사람이 남긴 한마디를 들려줘요", 17f))
 
-        pleosText = section(
-            column, "① Pleos SDK · NaviHelper(위치·진행 방향·다음 회전) / Vehicle State(와이퍼·전조등·배터리)",
-            "Virtual Console에서 와이퍼·전조등·배터리를 바꾸면 값이 따라 바뀌어야 합니다.",
-            "Vehicle 다시 읽기" to { pleosCheck.readVehicle() },
-        )
-        locationText = section(
-            column, "② 안드로이드 표준 위치 (LocationManager)",
-            "명령어로 GPS를 넣거나 경로 재생을 켜면 값이 바뀝니다.",
-            "위치 받기 시작" to { locationCheck.start() },
-        )
-        carText = section(
-            column, "③ 차량 속도·기어·주행 제한 (AAOS Car API)",
-            "Virtual Console에서 기어를 D로 바꾸면 기어와 주행 제한이 바뀌어야 합니다.",
-        )
-        backgroundText = section(
-            column, "④ 창을 닫은 뒤 백그라운드 동작",
-            "시작 → 홈 버튼으로 앱을 닫고 1분 뒤 돌아와 하트비트 횟수가 늘었는지 봅니다.",
-            "백그라운드 시작" to { BackgroundCheckService.start(this) },
-            "중지" to { BackgroundCheckService.stop(this) },
-        )
-        audioText = section(
-            column, "⑤ 음악·내비 음성과 함께 재생 (오디오 포커스)",
-            "가짜 음악을 켠 상태에서 한마디를 재생하고, 한마디 재생 중에 가짜 내비 안내를 눌러 봅니다.",
-            "가짜 음악" to { audioCheck.music.play() },
-            "한마디(MEDIA)" to { audioCheck.messageAsMedia.play() },
-            "한마디(ASSISTANT)" to { audioCheck.messageAsAssistant.play() },
-            "가짜 내비 안내" to { audioCheck.navigation.play() },
-            "모두 정지" to { audioCheck.stopAll() },
-        )
-        keyText = section(
-            column, "⑥ 핸들·미디어 버튼",
-            "가짜 음악 재생 중에 핸들의 다음 곡·재생 버튼을 누르면 여기에 표시됩니다.",
-        )
-        column.addView(text("최근 기록", 22f, bold = true))
-        logText = text("", 15f)
+        guideText = section(column, "안내", 24f)
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        listenButton = button(row, "듣기") { guide.accept() }
+        skipButton = button(row, "넘기기") { guide.skip() }
+        thanksButton = button(row, "고마워요") { guide.thanks() }
+        column.addView(row)
+
+        aheadText = section(column, "앞쪽 길", 20f)
+        driveText = section(column, "지금", 18f)
+        serverText = section(column, "서버", 16f)
+        column.addView(text("최근 기록", 20f, bold = true).apply { setPadding(0, dp(24), 0, dp(4)) })
+        logText = text("", 14f)
         column.addView(logText)
 
         return ScrollView(this).apply { addView(column) }
     }
 
-    private fun section(parent: LinearLayout, heading: String, hint: String, vararg actions: Pair<String, () -> Unit>): TextView {
+    private fun section(parent: LinearLayout, heading: String, size: Float): TextView {
         parent.addView(text(heading, 22f, bold = true).apply { setPadding(0, dp(24), 0, dp(4)) })
-        parent.addView(text(hint, 15f))
-        if (actions.isNotEmpty()) {
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            actions.forEach { (label, action) ->
-                row.addView(Button(this).apply {
-                    text = label
-                    textSize = 18f
-                    isAllCaps = false
-                    setOnClickListener { action() }
-                })
-            }
-            parent.addView(row)
-        }
-        return text("-", 19f).also { parent.addView(it) }
+        return text("-", size).also { parent.addView(it) }
+    }
+
+    private fun button(parent: LinearLayout, label: String, action: () -> Unit) = Button(this).apply {
+        text = label
+        textSize = 22f
+        isAllCaps = false
+        minimumWidth = dp(180)
+        setOnClickListener { action() }
+        parent.addView(this)
     }
 
     private fun text(value: String, size: Float, bold: Boolean = false) = TextView(this).apply {
@@ -204,7 +159,6 @@ class MainActivity : Activity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        private const val REQUEST_PERMISSIONS = 1
-        private const val PERMISSION_CAR_SPEED = "android.car.permission.CAR_SPEED"
+        private const val REQUEST_LOCATION = 1
     }
 }

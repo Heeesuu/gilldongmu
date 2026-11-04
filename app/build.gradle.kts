@@ -16,9 +16,19 @@ android {
         versionName = "0.1.0"
     }
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     buildTypes {
+        debug {
+            // 에뮬레이터에서 본 내 Mac의 로컬 서버
+            buildConfigField("String", "SERVER_URL", "\"http://10.0.2.2:8080/v1\"")
+        }
         release {
             isMinifyEnabled = false
+            // 배포 주소가 정해지면 https 주소로 바꾼다 (docs/api.md 1장).
+            buildConfigField("String", "SERVER_URL", "\"\"")
         }
     }
 
@@ -34,4 +44,6 @@ android {
 dependencies {
     implementation(libs.pleos.vehicle)
     implementation(libs.pleos.navihelper)
+
+    testImplementation(libs.junit)
 }

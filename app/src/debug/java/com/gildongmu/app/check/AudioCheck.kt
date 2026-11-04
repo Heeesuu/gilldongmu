@@ -1,4 +1,4 @@
-package com.gildongmu.app
+package com.gildongmu.app.check
 
 import android.content.Context
 import android.media.AudioAttributes
@@ -8,6 +8,7 @@ import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Handler
 import android.os.Looper
+import com.gildongmu.app.EventLog
 import kotlin.math.PI
 import kotlin.math.sin
 
