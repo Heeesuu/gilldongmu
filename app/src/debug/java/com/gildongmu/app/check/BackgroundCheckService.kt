@@ -1,4 +1,4 @@
-package com.gildongmu.app
+package com.gildongmu.app.check
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import com.gildongmu.app.EventLog
 
 /**
  * 확인 항목: 창을 닫은 뒤에도 위치를 받으며 살아 있는지(소리만 쓰는 방식의 전제 조건).

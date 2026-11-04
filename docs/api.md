@@ -294,7 +294,8 @@
   - 미디어 용도(`USAGE_MEDIA`)
   - 잠깐 포커스(`AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`)
   - 내비 안내가 오면 직접 멈춤(`setWillPauseWhenDucked(true)`)
-- **진행 방향**: 표준 GPS의 bearing을 쓰고, 없으면 직전 위치와의 방위로 계산합니다. 시속 5km 미만이면 마지막 방향을 유지합니다.
+- **진행 방향**: 표준 GPS의 bearing을 정확도 20° 이내일 때 쓰고, 아니면 직전 기준 위치에서 8m 이상 움직였을 때 두 위치 사이의 방위로 계산합니다. 시속 5km 미만이면 마지막 방향을 유지합니다.
+  - 에뮬레이터의 `geo fix`는 bearing 0°, 정확도 30°를 고정으로 보내므로 위치로 계산하는 쪽을 탑니다.
 
 ---
 

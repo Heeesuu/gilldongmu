@@ -5,6 +5,8 @@
         android:name="android.hardware.type.automotive"
         android:required="true" />
 
+    <!-- 길동무 서버 -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- 표준 위치 -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -25,6 +27,7 @@
     <application
         android:icon="@android:drawable/ic_menu_mylocation"
         android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@android:style/Theme.DeviceDefault">
 
         <!-- 다이얼(로터리) 컨트롤러는 아직 지원하지 않음 -->
@@ -45,10 +48,5 @@
                 android:name="distractionOptimized"
                 android:value="true" />
         </activity>
-
-        <service
-            android:name=".BackgroundCheckService"
-            android:exported="false"
-            android:foregroundServiceType="location" />
     </application>
 </manifest>

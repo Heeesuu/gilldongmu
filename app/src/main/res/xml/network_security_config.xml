@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 제출용 빌드: https만 쓴다. 개발용 빌드는 src/debug 쪽 설정이 이 파일을 덮어쓴다. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

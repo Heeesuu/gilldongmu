@@ -1,4 +1,4 @@
-package com.gildongmu.app
+package com.gildongmu.app.check
 
 import ai.pleos.playground.navi.constants.NaviErrorCode
 import ai.pleos.playground.navi.constants.NavigationStatus
@@ -17,6 +17,7 @@ import ai.pleos.playground.vehicle.listener.WiperStateListener
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import com.gildongmu.app.EventLog
 import java.util.Locale
 
 /**
