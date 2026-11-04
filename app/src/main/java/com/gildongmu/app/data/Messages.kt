@@ -26,6 +26,19 @@ enum class Kind(val wire: String, val label: String) {
     }
 }
 
+/** `review`: 남긴 사람에게만 보이는 검수 결과. */
+enum class Review(val wire: String, val label: String) {
+    PENDING("pending", "검수 중"),
+    CLEAN("clean", "공개"),
+    PROFANITY("profanity", "필터 끈 사람에게만 들림"),
+    HOLD("hold", "확인할 때까지 비공개"),
+    BLOCKED("blocked", "공개 안 함");
+
+    companion object {
+        fun of(wire: String) = entries.firstOrNull { it.wire == wire } ?: PENDING
+    }
+}
+
 /** `POST /v1/messages/{id}/listen`의 `result`. */
 enum class ListenResult(val wire: String) {
     COMPLETED("completed"),
@@ -59,6 +72,32 @@ data class NearbyResult(
     val totalAhead: Int,
     val messages: List<NearbyMessage>,
     val nextPollSec: Int,
+)
+
+/** `POST /v1/messages`의 `meta`. 위치·방향·속도는 녹음을 시작한 순간의 값이다. */
+data class UploadMeta(
+    val recordedAt: String,
+    val lat: Double,
+    val lon: Double,
+    val heading: Double,
+    val speedKmh: Double,
+    val durationMs: Long,
+    val wiperOn: Boolean?,
+    val headlightOn: Boolean?,
+)
+
+data class UploadResult(val id: String, val stage: Stage)
+
+/** `GET /v1/me/messages`의 한 항목. */
+data class MyMessage(
+    val id: String,
+    val stage: Stage,
+    val kind: Kind,
+    val review: Review,
+    val durationMs: Int,
+    val listenCount: Int,
+    val thanksCount: Int,
+    val createdAt: String,
 )
 
 data class ThanksResult(

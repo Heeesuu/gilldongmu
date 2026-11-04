@@ -16,13 +16,16 @@ import android.widget.TextView
 import com.gildongmu.app.data.DeviceId
 import com.gildongmu.app.data.ServerApi
 import com.gildongmu.app.drive.DriveTracker
+import com.gildongmu.app.drive.VehicleSignals
 import com.gildongmu.app.guide.GuideController
 import com.gildongmu.app.guide.SteeringKeys
+import com.gildongmu.app.record.MyMessages
+import com.gildongmu.app.record.RecordController
 
 /**
- * 길동무 본 화면 (MVP 1단계: 듣기).
+ * 길동무 본 화면 (MVP 1단계 듣기 + 2단계 남기기).
  * 주행 중에도 띄울 수 있도록(DO) 글자 입력과 애니메이션 없이 큰 글씨와 버튼만 쓴다.
- * 녹음·꽃 아이콘·주행/정차 화면 전환은 다음 단계에서 붙인다.
+ * 꽃 아이콘·주행/정차 화면 전환은 다음 단계에서 붙인다.
  */
 class MainActivity : Activity() {
 
@@ -30,15 +33,21 @@ class MainActivity : Activity() {
 
     private lateinit var guide: GuideController
     private lateinit var tracker: DriveTracker
+    private lateinit var vehicle: VehicleSignals
+    private lateinit var record: RecordController
+    private lateinit var myMessages: MyMessages
 
     private lateinit var driveText: TextView
     private lateinit var aheadText: TextView
     private lateinit var guideText: TextView
+    private lateinit var recordText: TextView
+    private lateinit var myText: TextView
     private lateinit var serverText: TextView
     private lateinit var logText: TextView
     private lateinit var listenButton: Button
     private lateinit var skipButton: Button
     private lateinit var thanksButton: Button
+    private lateinit var recordButton: Button
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -50,11 +59,17 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val api = ServerApi(BuildConfig.SERVER_URL, DeviceId.get(this), BuildConfig.VERSION_NAME)
-        guide = GuideController(this, api)
+        // 녹음하는 동안에는 "들을까요?"를 묻지 않는다.
+        guide = GuideController(this, api, canPrompt = { record.phase == RecordController.Phase.IDLE })
         tracker = DriveTracker(this) { guide.onDrive(it) }
+        vehicle = VehicleSignals(this)
+        myMessages = MyMessages(api)
+        record = RecordController(this, api, vehicle, currentDrive = { tracker.latest }) { id -> myMessages.track(id) }
 
         setContentView(buildLayout())
         EventLog.add("앱", "길동무 시작 · 서버 ${BuildConfig.SERVER_URL.ifEmpty { "(미설정)" }}")
+        vehicle.start()
+        myMessages.start()
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             tracker.start()
         } else {
@@ -73,6 +88,9 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        record.release()
+        myMessages.stop()
+        vehicle.stop()
         tracker.stop()
         guide.release()
         super.onDestroy()
@@ -92,8 +110,19 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQUEST_LOCATION && !tracker.start()) {
-            EventLog.add("권한", "위치 권한이 있어야 앞쪽 한마디를 찾을 수 있어요")
+        val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        when (requestCode) {
+            REQUEST_LOCATION -> if (!tracker.start()) EventLog.add("권한", "위치 권한이 있어야 앞쪽 한마디를 찾을 수 있어요")
+            // 남기기 버튼을 눌러서 권한을 물었으므로, 허용되면 바로 녹음을 시작한다.
+            REQUEST_RECORD -> if (granted) record.toggle() else EventLog.add("권한", "마이크 권한이 있어야 한마디를 남길 수 있어요")
+        }
+    }
+
+    private fun onRecordPressed() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            record.toggle()
+        } else {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_RECORD)
         }
     }
 
@@ -101,6 +130,8 @@ class MainActivity : Activity() {
         driveText.text = tracker.latest?.let(DriveTracker::describe) ?: "GPS 위치를 기다리는 중"
         aheadText.text = guide.aheadSummary()
         guideText.text = guide.statusText()
+        recordText.text = record.statusText()
+        myText.text = myMessages.summary()
         serverText.text = guide.serverStatus
         logText.text = EventLog.recent()
 
@@ -109,6 +140,12 @@ class MainActivity : Activity() {
         skipButton.isEnabled = phase != GuideController.Phase.IDLE
         thanksButton.isEnabled = guide.lastHeard != null || phase == GuideController.Phase.PLAYING
         thanksButton.text = guide.lastThanks?.let { "고마워요 ${it.thanksCount} · ${it.stage.label}" } ?: "고마워요"
+
+        // 듣는 중에는 녹음하지 않는다. 녹음 중에는 끝내기 버튼으로 쓴다.
+        val recording = record.phase == RecordController.Phase.RECORDING
+        recordButton.text = if (recording) "녹음 끝내기" else "한마디 남기기"
+        recordButton.isEnabled = recording ||
+            (record.phase == RecordController.Phase.IDLE && phase == GuideController.Phase.IDLE)
     }
 
     private fun buildLayout(): View {
@@ -126,7 +163,13 @@ class MainActivity : Activity() {
         thanksButton = button(row, "고마워요") { guide.thanks() }
         column.addView(row)
 
+        recordText = section(column, "남기기", 20f)
+        val recordRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        recordButton = button(recordRow, "한마디 남기기") { onRecordPressed() }.apply { minimumWidth = dp(360) }
+        column.addView(recordRow)
+
         aheadText = section(column, "앞쪽 길", 20f)
+        myText = section(column, "내가 남긴 한마디", 18f)
         driveText = section(column, "지금", 18f)
         serverText = section(column, "서버", 16f)
         column.addView(text("최근 기록", 20f, bold = true).apply { setPadding(0, dp(24), 0, dp(4)) })
@@ -160,5 +203,6 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQUEST_LOCATION = 1
+        private const val REQUEST_RECORD = 2
     }
 }

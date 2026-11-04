@@ -7,6 +7,8 @@
 
     <!-- 길동무 서버 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 한마디 녹음 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 표준 위치 -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />

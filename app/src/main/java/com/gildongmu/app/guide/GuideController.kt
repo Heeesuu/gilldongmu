@@ -27,6 +27,8 @@ class GuideController(
     private val api: ServerApi,
     private val policy: GuidePolicy = GuidePolicy(),
     private val clock: () -> Long = SystemClock::elapsedRealtime,
+    /** false인 동안(예: 한마디를 녹음하는 중)에는 "들을까요?"를 묻지 않는다. */
+    private val canPrompt: () -> Boolean = { true },
 ) {
     enum class Phase { IDLE, PROMPTING, LOADING, PLAYING }
 
@@ -68,7 +70,7 @@ class GuideController(
         drive = state
         if (api.configured && !polling && policy.shouldPoll(lastPoll, state, clock(), nextPollSec)) poll(state)
         refreshApproaches()
-        if (phase == Phase.IDLE) policy.pickPrompt(approaches, clock(), lastPromptAtMs)?.let { prompt(it) }
+        if (phase == Phase.IDLE && canPrompt()) policy.pickPrompt(approaches, clock(), lastPromptAtMs)?.let { prompt(it) }
     }
 
     fun onKey(key: SteeringKeys.Key) {
