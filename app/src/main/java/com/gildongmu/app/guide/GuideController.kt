@@ -9,6 +9,7 @@ import com.gildongmu.app.data.ListenResult
 import com.gildongmu.app.data.NearbyMessage
 import com.gildongmu.app.data.NearbyQuery
 import com.gildongmu.app.data.ServerApi
+import com.gildongmu.app.data.Stage
 import com.gildongmu.app.data.ThanksResult
 import com.gildongmu.app.drive.DriveState
 import java.io.File
@@ -29,6 +30,8 @@ class GuideController(
     private val clock: () -> Long = SystemClock::elapsedRealtime,
     /** false인 동안(예: 한마디를 녹음하는 중)에는 "들을까요?"를 묻지 않는다. */
     private val canPrompt: () -> Boolean = { true },
+    /** 비속어 필터 설정. 조회할 때마다 읽는다. */
+    private val filterOn: () -> Boolean = { true },
 ) {
     enum class Phase { IDLE, PROMPTING, LOADING, PLAYING }
 
@@ -136,6 +139,14 @@ class GuideController(
         }
     }
 
+    /** 설정이 바뀌었을 때처럼, 다음 위치에서 바로 다시 조회하게 한다. */
+    fun refreshSoon() {
+        lastPoll = null
+    }
+
+    /** 화면에 그릴 단계: 고마워요 결과가 있으면 그 단계(꽃이 피는 순간), 아니면 묻거나 들은 한마디의 단계. */
+    fun shownStage(): Stage? = lastThanks?.stage ?: (current ?: lastHeard)?.stage
+
     fun release() {
         handler.removeCallbacks(promptTimeout)
         audio.end()
@@ -143,12 +154,14 @@ class GuideController(
         api.shutdown()
     }
 
-    fun aheadSummary(): String {
+    /** `brief`이면 개수 한 줄만 돌려준다 (주행 중 화면). */
+    fun aheadSummary(brief: Boolean = false): String {
         if (!api.configured) return serverStatus
         if (drive?.heading == null) return "움직이기 시작하면 앞쪽 길을 살펴요."
         if (approaches.isEmpty()) return "앞쪽 길에 남겨진 한마디가 없어요."
         // 서버가 센 수에서, 조회 뒤에 지나쳤거나 이미 물어본 것만큼 뺀다.
         val count = (totalAhead - (messages.size - approaches.size)).coerceAtLeast(approaches.size)
+        if (brief) return "앞쪽 길에 남겨진 한마디가 ${count}개 있어요."
         val lines = approaches.joinToString("\n") { a ->
             val eta = a.etaSec?.let { " · ${it.roundToInt()}초 뒤" }.orEmpty()
             "· ${a.message.kind.label} · ${a.message.stage.label} · ${a.distanceM.roundToInt()}m$eta"
@@ -177,7 +190,12 @@ class GuideController(
 
     private fun idleText(): String {
         val wait = lastPromptAtMs?.let { policy.promptIntervalMs - (clock() - it) }?.takeIf { it > 0 }
-        val heard = lastHeard?.let { "방금 들은 ${it.kind.label} 한마디가 좋았다면 고마워요를 눌러 주세요.\n" }.orEmpty()
+        val thanks = lastThanks
+        val heard = when {
+            thanks?.stage == Stage.FLOWER -> "꽃이 피었어요! 이 한마디에 고마워요가 ${thanks.thanksCount}개 모였어요.\n"
+            thanks != null -> "고마워요를 남겼어요. 지금 ${thanks.thanksCount}개예요.\n"
+            else -> lastHeard?.let { "방금 들은 ${it.kind.label} 한마디가 좋았다면 고마워요를 눌러 주세요.\n" }.orEmpty()
+        }
         val next = if (wait != null) {
             "다음 안내는 %d분 %02d초 뒤부터예요.".format(Locale.KOREA, wait / 60_000, wait / 1_000 % 60)
         } else {
@@ -190,7 +208,7 @@ class GuideController(
         val heading = state.heading ?: return
         polling = true
         lastPoll = GuidePolicy.PollMark(state.lat, state.lon, clock())
-        api.nearby(NearbyQuery(state.lat, state.lon, heading, state.speedKmh)) { result ->
+        api.nearby(NearbyQuery(state.lat, state.lon, heading, state.speedKmh, filterOn())) { result ->
             polling = false
             result.onSuccess {
                 if (it.totalAhead != totalAhead) EventLog.add("서버", "앞쪽 한마디 ${it.totalAhead}개")
@@ -232,7 +250,9 @@ class GuideController(
 
     private fun play(message: NearbyMessage, file: File) {
         phase = Phase.PLAYING
-        audio.play(file) { completed, playedMs ->
+        // 올린 길이(최대 15초)보다 1초 넘게 틀지 않는다.
+        val maxMs = message.durationMs.toLong().coerceIn(1_000L, MAX_MESSAGE_MS) + 1_000L
+        audio.play(file, maxMs) { completed, playedMs ->
             report(message, if (completed) ListenResult.COMPLETED else ListenResult.SKIPPED, playedMs)
             lastHeard = message
             lastThanks = null
@@ -261,5 +281,6 @@ class GuideController(
 
     companion object {
         private const val ANSWER_TIMEOUT_MS = 8_000L
+        private const val MAX_MESSAGE_MS = 15_000L
     }
 }

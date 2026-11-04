@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 꽃: 고마워요 5개 이상. 꽃잎 다섯 장과 노란 꽃술. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#8D6E63"
+        android:pathData="M6,38h36a2,2 0,0 1,0 4H6a2,2 0,0 1,0 -4z" />
+    <path
+        android:fillColor="#66BB6A"
+        android:pathData="M23,20h2v19h-2z" />
+    <path
+        android:fillColor="#43A047"
+        android:pathData="M25,33c3.5,-5 8.5,-6.5 12,-5.5c-2,4.5 -7,6.5 -12,5.5z" />
+    <path
+        android:fillColor="#F48FB1"
+        android:pathData="M19,10a5,5 0,1 0,10 0a5,5 0,1 0,-10 0z M24.7,14.1a5,5 0,1 0,10 0a5,5 0,1 0,-10 0z M22.5,20.9a5,5 0,1 0,10 0a5,5 0,1 0,-10 0z M15.5,20.9a5,5 0,1 0,10 0a5,5 0,1 0,-10 0z M13.3,14.1a5,5 0,1 0,10 0a5,5 0,1 0,-10 0z" />
+    <path
+        android:fillColor="#FFD54F"
+        android:pathData="M20.5,16a3.5,3.5 0,1 0,7 0a3.5,3.5 0,1 0,-7 0z" />
+</vector>

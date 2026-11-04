@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 꽃밭의 추억: 유효기간이 끝났지만 남긴 사람의 기여는 남는다. 꽃 모양을 차분한 색으로. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#8D6E63"
+        android:pathData="M6,38h36a2,2 0,0 1,0 4H6a2,2 0,0 1,0 -4z" />
+    <path
+        android:fillColor="#9E9E9E"
+        android:pathData="M23,20h2v19h-2z" />
+    <path
+        android:fillColor="#B39DDB"
+        android:pathData="M19,10a5,5 0,1 0,10 0a5,5 0,1 0,-10 0z M24.7,14.1a5,5 0,1 0,10 0a5,5 0,1 0,-10 0z M22.5,20.9a5,5 0,1 0,10 0a5,5 0,1 0,-10 0z M15.5,20.9a5,5 0,1 0,10 0a5,5 0,1 0,-10 0z M13.3,14.1a5,5 0,1 0,10 0a5,5 0,1 0,-10 0z" />
+    <path
+        android:fillColor="#E0D9C0"
+        android:pathData="M20.5,16a3.5,3.5 0,1 0,7 0a3.5,3.5 0,1 0,-7 0z" />
+</vector>

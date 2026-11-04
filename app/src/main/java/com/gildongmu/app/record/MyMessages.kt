@@ -21,7 +21,9 @@ class MyMessages(private val api: ServerApi) {
     private val tick = Runnable { refresh() }
     private val timeFormat = DateTimeFormatter.ofPattern("M/d HH:mm")
 
-    private var items: List<MyMessage> = emptyList()
+    /** 최근 순 (서버가 최대 50개). 정차 중 '내 꽃밭'에 그린다. */
+    var items: List<MyMessage> = emptyList()
+        private set
     /** 검수 결과를 기다리는 한마디. 방금 올린 것은 서버 목록에 나오기 전에 여기 넣어 둔다. */
     private val waiting = mutableSetOf<String>()
     private var stages: Map<String, Stage> = emptyMap()
@@ -47,13 +49,10 @@ class MyMessages(private val api: ServerApi) {
         refresh()
     }
 
-    fun summary(): String {
-        if (items.isEmpty()) return "아직 남긴 한마디가 없어요."
-        val lines = items.take(MAX_LINES).joinToString("\n") { m ->
-            val review = if (m.review == Review.CLEAN) "" else "(${m.review.label})"
-            "· ${timeOf(m.createdAt)} · ${m.kind.label} · ${m.stage.label}$review · 들은 ${m.listenCount} · 고마워요 ${m.thanksCount}"
-        }
-        return listOfNotNull(news, lines).joinToString("\n")
+    /** 한마디 한 줄 (아이콘 옆에 붙는 글자). */
+    fun lineOf(m: MyMessage): String {
+        val review = if (m.review == Review.CLEAN) "" else " (${m.review.label})"
+        return "${timeOf(m.createdAt)} · ${m.kind.label} · ${m.stage.label}$review\n들은 ${m.listenCount}명 · 고마워요 ${m.thanksCount}"
     }
 
     private fun refresh() {
@@ -100,8 +99,17 @@ class MyMessages(private val api: ServerApi) {
     }.getOrDefault(createdAt)
 
     companion object {
-        private const val MAX_LINES = 5
         private const val PENDING_POLL_MS = 5_000L
         private const val IDLE_POLL_MS = 60_000L
+
+        /** 꽃 소식 (기획서 4번 시나리오): "내 한마디를 N명이 들었고 M명이 고마워했어요". 남긴 게 없으면 null. */
+        fun bloomSummary(items: List<MyMessage>): String? {
+            if (items.isEmpty()) return null
+            val listened = items.sumOf { it.listenCount }
+            val thanked = items.sumOf { it.thanksCount }
+            val flowers = items.count { it.stage == Stage.FLOWER }
+            val bloom = if (flowers > 0) " 꽃이 ${flowers}송이 피었어요." else ""
+            return "한마디 ${items.size}개를 남겼어요. ${listened}명이 들었고 ${thanked}명이 고마워했어요.$bloom"
+        }
     }
 }

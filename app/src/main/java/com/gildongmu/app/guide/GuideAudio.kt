@@ -9,6 +9,7 @@ import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import com.gildongmu.app.EventLog
 import java.io.File
 import kotlin.math.PI
@@ -42,6 +43,15 @@ class GuideAudio(context: Context, private val onFocusLost: () -> Unit) {
     private var pausedByFocus = false
     private var onDone: ((completed: Boolean, playedMs: Long) -> Unit)? = null
 
+    // 길이 제한은 실제로 소리가 난 시간만 센다. 내비 안내로 멈춘 동안은 세지 않는다.
+    private var limitMs = 0L
+    private var playedBeforeMs = 0L
+    private var playingSinceMs: Long? = null
+    private val lengthLimit = Runnable {
+        EventLog.add("오디오", "정해진 길이가 지나 멈췄어요")
+        finish(completed = true, playedMs = limitMs)
+    }
+
     @Volatile
     var state = "조용함"
         private set
@@ -65,7 +75,11 @@ class GuideAudio(context: Context, private val onFocusLost: () -> Unit) {
         handler.postDelayed({ track.release() }, 1_000L)
     }
 
-    fun play(file: File, onDone: (completed: Boolean, playedMs: Long) -> Unit) {
+    /**
+     * `maxMs`가 지나면 끝까지 들은 것으로 보고 멈춘다. OGG 파일에 `ANDROID_LOOP=true` 태그가 있으면
+     * MediaPlayer가 끝없이 되풀이하므로(에뮬레이터 벨소리로 확인), 올린 사람이 넣은 태그가 듣는 차를 붙잡지 않게 한다.
+     */
+    fun play(file: File, maxMs: Long, onDone: (completed: Boolean, playedMs: Long) -> Unit) {
         releasePlayer()
         this.onDone = onDone
         pausedByFocus = false
@@ -73,9 +87,13 @@ class GuideAudio(context: Context, private val onFocusLost: () -> Unit) {
         player = MediaPlayer().apply {
             setAudioAttributes(attributes)
             setDataSource(file.path)
+            isLooping = false
             setOnPreparedListener {
                 it.start()
                 state = "재생 중"
+                limitMs = maxMs
+                playedBeforeMs = 0L
+                startLimit()
             }
             setOnCompletionListener { finish(completed = true, playedMs = it.duration.toLong()) }
             setOnErrorListener { _, what, extra ->
@@ -112,7 +130,20 @@ class GuideAudio(context: Context, private val onFocusLost: () -> Unit) {
         callback?.invoke(completed, playedMs)
     }
 
+    private fun startLimit() {
+        playingSinceMs = SystemClock.elapsedRealtime()
+        handler.postDelayed(lengthLimit, (limitMs - playedBeforeMs).coerceAtLeast(0L))
+    }
+
+    private fun pauseLimit() {
+        handler.removeCallbacks(lengthLimit)
+        playingSinceMs?.let { playedBeforeMs += SystemClock.elapsedRealtime() - it }
+        playingSinceMs = null
+    }
+
     private fun releasePlayer() {
+        handler.removeCallbacks(lengthLimit)
+        playingSinceMs = null
         player?.let {
             runCatching { it.stop() }
             it.release()
@@ -127,11 +158,13 @@ class GuideAudio(context: Context, private val onFocusLost: () -> Unit) {
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ->
                 if (current != null && current.isPlaying) {
                     current.pause()
+                    pauseLimit()
                     pausedByFocus = true
                     state = "내비 안내로 잠시 멈춤"
                 }
             AudioManager.AUDIOFOCUS_GAIN -> if (current != null && pausedByFocus) {
                 current.start()
+                startLimit()
                 pausedByFocus = false
                 state = "재생 중"
             }
