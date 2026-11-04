@@ -60,7 +60,8 @@ data class NearbyMessage(
     val kind: Kind,
     val lat: Double,
     val lon: Double,
-    val heading: Double,
+    /** null이면 방향을 모른 채 남겨진 한마디라 양쪽 방향 모두에 들린다. */
+    val heading: Double?,
     val distanceM: Int,
     val etaSec: Int?,
     val durationMs: Int,
@@ -74,12 +75,12 @@ data class NearbyResult(
     val nextPollSec: Int,
 )
 
-/** `POST /v1/messages`의 `meta`. 위치·방향·속도는 녹음을 시작한 순간의 값이다. */
+/** `POST /v1/messages`의 `meta`. 위치·속도는 녹음을 시작한 순간의 값이고, 방향은 모르면 null이다. */
 data class UploadMeta(
     val recordedAt: String,
     val lat: Double,
     val lon: Double,
-    val heading: Double,
+    val heading: Double?,
     val speedKmh: Double,
     val durationMs: Long,
     val wiperOn: Boolean?,

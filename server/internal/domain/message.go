@@ -51,11 +51,12 @@ const (
 
 // Message는 길 위에 남긴 한마디다. 작성자가 지우면 음성과 글자까지 바로 지운다(하드 삭제).
 type Message struct {
-	ID           string  `gorm:"primaryKey;type:varchar(36)"`
-	DeviceID     string  `gorm:"type:varchar(36);not null;index"`
-	Lat          float64 `gorm:"not null"`
-	Lon          float64 `gorm:"not null"`
-	Heading      float64 `gorm:"not null"`
+	ID       string  `gorm:"primaryKey;type:varchar(36)"`
+	DeviceID string  `gorm:"type:varchar(36);not null;index"`
+	Lat      float64 `gorm:"not null"`
+	Lon      float64 `gorm:"not null"`
+	// Heading이 nil이면 방향을 모른 채 올라온 한마디다. 같은 방향 조건 없이 양쪽 방향 모두에 들린다.
+	Heading      *float64
 	SpeedKmh     float64
 	CellX        int `gorm:"not null;index:idx_messages_cell"`
 	CellY        int `gorm:"not null;index:idx_messages_cell"`

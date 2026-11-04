@@ -66,6 +66,31 @@ func TestNearbyDirectionFilter(t *testing.T) {
 	}
 }
 
+// 방향을 끝내 모른 한마디는 양쪽 방향 차 모두에 들린다. 앞쪽에 있어야 한다는 조건은 그대로다.
+func TestNearbyMessageWithoutHeading(t *testing.T) {
+	env := ts.NewEnv(t)
+	m := env.UploadWithoutHeading(t, author, ts.MessageLat, ts.MessageLon)
+	if m.Heading != nil {
+		t.Fatalf("방향 없이 올린 한마디는 heading이 비어 있어야 합니다: %v", *m.Heading)
+	}
+	if err := env.Moderation.Moderate(context.Background(), m.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if r := nearby(t, env, listener, ts.BehindLat, ts.BehindLon, ts.Heading, true); r.TotalAhead != 1 {
+		t.Errorf("같은 방향으로 다가오는 차에 보여야 합니다: %+v", r)
+	}
+	// 지나친 곳에서 반대로 돌아오면 한마디가 앞쪽에 있다.
+	if r := nearby(t, env, listener, ts.PassedLat, ts.PassedLon, 225, true); r.TotalAhead != 1 {
+		t.Errorf("반대 방향으로 다가오는 차에도 보여야 합니다: %+v", r)
+	}
+	if r := nearby(t, env, listener, ts.PassedLat, ts.PassedLon, ts.Heading, true); r.TotalAhead != 0 {
+		t.Errorf("이미 지나친 한마디는 보이면 안 됩니다")
+	}
+}
+
+func ptr(v float64) *float64 { return &v }
+
 // 시연 2번 장면: 고마워요 5개면 꽃이 된다. 같은 기기는 한 번만 센다.
 func TestThanksTurnsIntoFlower(t *testing.T) {
 	env := ts.NewEnv(t)
@@ -183,7 +208,7 @@ func TestDailyUploadLimit(t *testing.T) {
 	}
 	_, err := env.Messages.Upload(context.Background(), usecase.UploadInput{
 		DeviceID: author, Audio: []byte("x"), AudioMime: domain.AudioMimeOgg, RecordedAt: env.Clock.Now(),
-		Lat: ts.MessageLat, Lon: ts.MessageLon, Heading: ts.Heading, DurationMs: 1000,
+		Lat: ts.MessageLat, Lon: ts.MessageLon, Heading: ptr(ts.Heading), DurationMs: 1000,
 	})
 	if !errors.Is(err, domain.ErrRateLimited) {
 		t.Errorf("하루 한도를 넘으면 RATE_LIMITED여야 합니다: %v", err)
@@ -194,12 +219,12 @@ func TestUploadValidation(t *testing.T) {
 	env := ts.NewEnv(t)
 	base := usecase.UploadInput{
 		DeviceID: author, Audio: []byte("x"), AudioMime: domain.AudioMimeOgg, RecordedAt: env.Clock.Now(),
-		Lat: ts.MessageLat, Lon: ts.MessageLon, Heading: ts.Heading, DurationMs: 1000,
+		Lat: ts.MessageLat, Lon: ts.MessageLon, Heading: ptr(ts.Heading), DurationMs: 1000,
 	}
 	cases := map[string]func(in *usecase.UploadInput){
 		"형식":     func(in *usecase.UploadInput) { in.AudioMime = "audio/mp4" },
 		"15초 초과": func(in *usecase.UploadInput) { in.DurationMs = 15_001 },
-		"방향 범위":  func(in *usecase.UploadInput) { in.Heading = 360 },
+		"방향 범위":  func(in *usecase.UploadInput) { in.Heading = ptr(360.0) },
 		"위도 범위":  func(in *usecase.UploadInput) { in.Lat = 91 },
 	}
 	for name, mutate := range cases {
