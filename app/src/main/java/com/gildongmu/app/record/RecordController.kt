@@ -178,8 +178,8 @@ class RecordController(
             recording.file.delete()
             if (released) return@upload
             result.onSuccess {
-                status = "씨앗을 심었어요. 검수가 끝나면 새싹이 돋아요."
-                EventLog.add("남기기", "씨앗을 심었어요 (${recording.durationMs / 1_000}초, 방향 ${heading?.let { "%.0f°".format(Locale.KOREA, it) } ?: "모름"}, 와이퍼 ${begun.wiperOn ?: "모름"}, 전조등 ${begun.headlightOn ?: "모름"})")
+                status = "한마디를 남겼어요. 확인이 끝나면 길 위에 길동무로 서요."
+                EventLog.add("남기기", "한마디를 남겼어요 (${recording.durationMs / 1_000}초, 방향 ${heading?.let { "%.0f°".format(Locale.KOREA, it) } ?: "모름"}, 와이퍼 ${begun.wiperOn ?: "모름"}, 전조등 ${begun.headlightOn ?: "모름"})")
                 onUploaded(it.id)
             }.onFailure {
                 status = "올리지 못했어요: ${it.message}"

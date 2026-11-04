@@ -44,6 +44,7 @@ func main() {
 
 	now := func() time.Time { return time.Now().UTC() }
 	messageUC := usecase.NewMessageUsecase(repo, uow, worker, now, uuid.NewString)
+	profileUC := usecase.NewProfileUsecase(repository.NewProfileRepository(db), moderation.NewDictionary(), now)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -51,7 +52,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           handler.NewRouter(handler.NewMessageHandler(messageUC)),
+		Handler:           handler.NewRouter(handler.NewMessageHandler(messageUC), handler.NewProfileHandler(profileUC)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

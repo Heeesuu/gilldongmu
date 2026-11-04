@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
@@ -14,16 +15,22 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import com.gildongmu.app.data.DeviceId
+import com.gildongmu.app.data.Kind
+import com.gildongmu.app.data.Look
+import com.gildongmu.app.data.Profile
 import com.gildongmu.app.data.MyMessage
 import com.gildongmu.app.data.Review
 import com.gildongmu.app.data.ServerApi
 import com.gildongmu.app.data.Settings
+import com.gildongmu.app.data.Stage
 import com.gildongmu.app.drive.DriveTracker
 import com.gildongmu.app.drive.DrivingMode
 import com.gildongmu.app.drive.VehicleSignals
@@ -37,14 +44,18 @@ import com.gildongmu.app.guide.SteeringKeys
 import com.gildongmu.app.record.MyMessages
 import com.gildongmu.app.record.RecordController
 import com.gildongmu.app.ui.ActionButton
-import com.gildongmu.app.ui.ActionButton.Look
+import com.gildongmu.app.ui.ActionButton.Look as ButtonLook
+import com.gildongmu.app.ui.ContextWords
+import com.gildongmu.app.ui.MateDrawable
+import com.gildongmu.app.ui.ProfileEditor
 import com.gildongmu.app.ui.RoadStripView
 import kotlin.math.roundToInt
 
 /**
  * 길동무 본 화면. 디자인은 B안 "길 띠": 왼쪽 띠에 앞쪽 길 위 한마디를 놓고, 오른쪽에 안내 카드와 남기기 버튼을 둔다.
  * - 주행 중: 길 띠, 안내 한 줄, 그때 필요한 큰 버튼만. 글자 입력·애니메이션·설정은 없다 (CarUxRestrictions).
- * - 정차 중: 위에 더해 탭으로 내 꽃밭과 설정을 볼 수 있다.
+ * - 정차 중: 위에 더해 탭으로 내 발자취와 설정을 볼 수 있다. 처음 실행하면 내 길동무(닉네임·모습)를 정한다.
+ * - 빈 곳은 Pleos 기본 앱처럼 정보로 채운다: 카드의 작은 표시(언제·비·반응), "이번 길" 타일, 남기기 옆 내 길동무.
  * - 낮·밤 색은 차 설정을 따르고(values-night), 창이 세로로 길면(화면 나누기) 띠를 위로 눕힌다.
  */
 class MainActivity : Activity(), GleoActions.Target {
@@ -54,6 +65,7 @@ class MainActivity : Activity(), GleoActions.Target {
     private val ui = Handler(Looper.getMainLooper())
 
     private lateinit var settings: Settings
+    private lateinit var api: ServerApi
     private lateinit var guide: GuideController
     private lateinit var tracker: DriveTracker
     private lateinit var drivingMode: DrivingMode
@@ -62,6 +74,9 @@ class MainActivity : Activity(), GleoActions.Target {
     private lateinit var myMessages: MyMessages
 
     private lateinit var modeText: TextView
+    private lateinit var headerMate: ImageView
+    private lateinit var headerName: TextView
+    private lateinit var profilePage: FrameLayout
     private lateinit var tabBar: LinearLayout
     private lateinit var tabButtons: Map<Tab, ActionButton>
     private lateinit var pages: Map<Tab, View>
@@ -71,6 +86,15 @@ class MainActivity : Activity(), GleoActions.Target {
     private lateinit var stageIcon: ImageView
     private lateinit var titleText: TextView
     private lateinit var detailText: TextView
+    private lateinit var chipsRow: LinearLayout
+    private lateinit var progressBar: ProgressBar
+    private lateinit var orderText: TextView
+    private lateinit var metText: TextView
+    private lateinit var thankedText: TextView
+    private lateinit var nextText: TextView
+    private lateinit var myMate: ImageView
+    private lateinit var myName: TextView
+    private lateinit var myStat: TextView
     private lateinit var actions: LinearLayout
     private lateinit var listenButton: ActionButton
     private lateinit var skipButton: ActionButton
@@ -85,6 +109,8 @@ class MainActivity : Activity(), GleoActions.Target {
     private lateinit var gardenGrid: LinearLayout
 
     // 설정 탭
+    private lateinit var settingsMate: ImageView
+    private lateinit var settingsName: TextView
     private lateinit var filterButton: ActionButton
     private lateinit var voiceButton: ActionButton
     private var driveText: TextView? = null
@@ -92,6 +118,14 @@ class MainActivity : Activity(), GleoActions.Target {
     private var logText: TextView? = null
 
     private var tab = Tab.ROAD
+    /** 내 길동무. 내 기기에서만 보인다. 서버에 저장하고 Settings에도 기억해 둔다. */
+    private var myProfile: Profile? = null
+    private var editor: ProfileEditor? = null
+    /** null이면 편집 중이 아님. true면 처음 실행이라 취소 없이 정해야 한다. */
+    private var editingFirstRun: Boolean? = null
+    private var chipsKey = ""
+    private var myMateKey = ""
+    private var shownMates: List<GuideController.Shown> = emptyList()
     private var filterDialog: AlertDialog? = null
     /** 내 꽃밭을 다시 그릴지 정하는 값. 0.5초마다 render()가 돌아서 바뀔 때만 다시 만든다. */
     private var gardenKey = ""
@@ -107,13 +141,15 @@ class MainActivity : Activity(), GleoActions.Target {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = Settings(this)
-        val api = ServerApi(BuildConfig.SERVER_URL, DeviceId.get(this), BuildConfig.VERSION_NAME)
+        api = ServerApi(BuildConfig.SERVER_URL, DeviceId.get(this), BuildConfig.VERSION_NAME)
+        myProfile = settings.profile
         guide = GuideController(
             this, api,
             // 녹음하는 동안에는 "들을까요?"를 묻지 않는다.
             canPrompt = { record.phase == RecordController.Phase.IDLE },
             filterOn = { settings.filterOn },
             voiceOn = { settings.voiceAnswer && hasMic() },
+            nickname = { myProfile?.nickname },
         )
         tracker = DriveTracker(this) {
             guide.onDrive(it)
@@ -138,12 +174,71 @@ class MainActivity : Activity(), GleoActions.Target {
             Manifest.permission.RECORD_AUDIO.takeIf { settings.voiceAnswer && !hasMic() },
         )
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), REQUEST_START)
+        loadProfile()
     }
 
-    /** 화면 나누기·낮밤 전환: 듣기·녹음은 그대로 두고 색과 배치만 새 설정으로 다시 만든다. */
+    /** 서버에서 내 길동무를 읽는다. 아직 없으면 처음 실행 화면을 띄운다(정차 중에만 보인다). */
+    private fun loadProfile() {
+        if (!api.configured) return
+        api.profile { result ->
+            result.onSuccess { profile ->
+                if (profile != null) {
+                    settings.profile = profile
+                    myProfile = profile
+                } else if (myProfile == null) {
+                    openEditor(firstRun = true)
+                }
+            }.onFailure {
+                EventLog.add("내 길동무", "서버에서 읽지 못했어요: ${it.message}")
+                if (myProfile == null) openEditor(firstRun = true)
+            }
+            render()
+        }
+    }
+
+    private fun openEditor(firstRun: Boolean) {
+        editingFirstRun = firstRun
+        val e = ProfileEditor(
+            this,
+            if (firstRun) null else myProfile,
+            onSave = { nickname, look -> saveProfile(nickname, look) },
+            onCancel = if (firstRun) null else ({ closeEditor() }),
+        )
+        editor = e
+        profilePage.removeAllViews()
+        profilePage.addView(ScrollView(this).apply { addView(e.view) })
+        render()
+    }
+
+    private fun saveProfile(nickname: String, look: Look) {
+        api.saveProfile(nickname, look) { result ->
+            result.onSuccess {
+                settings.profile = it
+                myProfile = it
+                EventLog.add("내 길동무", "${it.nickname} · 저장했어요")
+                closeEditor()
+            }.onFailure { editor?.showError(it.message ?: "저장하지 못했어요. 잠시 뒤에 다시 해 주세요.") }
+        }
+    }
+
+    private fun closeEditor() {
+        editingFirstRun = null
+        editor = null
+        profilePage.removeAllViews()
+        hideKeyboard()
+        myMateKey = ""
+        render()
+    }
+
+    private fun hideKeyboard() {
+        getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(window.decorView.windowToken, 0)
+    }
+
+    /** 화면 나누기·낮밤 전환: 듣기·녹음은 그대로 두고 색과 배치만 새 설정으로 다시 만든다. 편집 중이면 편집 화면도 다시 연다. */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         setContentView(buildLayout())
+        editingFirstRun?.let { openEditor(it) }
         render()
     }
 
@@ -256,8 +351,11 @@ class MainActivity : Activity(), GleoActions.Target {
     }
 
     private fun onDrivingChanged(driving: Boolean) {
-        // 주행 중에는 설정을 열 수 없다. 정차 중에 띄운 확인 창도 닫는다.
-        if (driving) filterDialog?.dismiss()
+        // 주행 중에는 설정을 열 수 없다. 정차 중에 띄운 확인 창도 닫고, 편집 화면은 정차할 때까지 숨긴다.
+        if (driving) {
+            filterDialog?.dismiss()
+            hideKeyboard()
+        }
         render()
     }
 
@@ -305,9 +403,14 @@ class MainActivity : Activity(), GleoActions.Target {
         // 주행 중에는 길 탭만 보여준다.
         if (driving) tab = Tab.ROAD
         modeText.update(if (driving) "주행 중" else "정차 중")
-        tabBar.visibility = if (driving) View.GONE else View.VISIBLE
-        tabButtons.forEach { (t, button) -> button.look = if (t == tab) Look.SELECTED else Look.OUTLINE }
-        pages.forEach { (t, page) -> page.visibility = if (t == tab) View.VISIBLE else View.GONE }
+        renderMyMate()
+        // 내 길동무 편집은 글자를 입력하므로 정차 중에만 보인다.
+        val editing = editingFirstRun != null && !driving
+        profilePage.show(editing)
+        tabBar.visibility = if (driving || editing) View.GONE else View.VISIBLE
+        tabButtons.forEach { (t, button) -> button.look = if (t == tab) ButtonLook.SELECTED else ButtonLook.OUTLINE }
+        pages.forEach { (t, page) -> page.visibility = if (t == tab && !editing) View.VISIBLE else View.GONE }
+        if (editing) return
         when (tab) {
             Tab.ROAD -> renderRoad()
             Tab.GARDEN -> renderGarden()
@@ -320,9 +423,26 @@ class MainActivity : Activity(), GleoActions.Target {
         titleText.update(status.title)
         detailText.update(status.detail)
         detailText.visibility = if (status.detail.isEmpty()) View.GONE else View.VISIBLE
-        val stage = guide.shownStage()
-        stageIcon.visibility = if (stage == null) View.GONE else View.VISIBLE
-        stage?.let { stageIcon.setImageResource(StageIcon.of(it)) }
+        // 카드 왼쪽에 지금 묻거나 듣는 길동무를 세운다. 바뀔 때만 다시 만든다.
+        // 보여줄 길동무가 없으면(앞쪽이 조용할 때) 내 길동무가 선다.
+        val mates = guide.shownMates()
+        val mine = myProfile
+        stageIcon.visibility = if (mates.isEmpty() && mine == null) View.GONE else View.VISIBLE
+        if (mates != shownMates || (mates.isEmpty() && stageIcon.drawable == null)) {
+            shownMates = mates
+            stageIcon.setImageDrawable(
+                if (mates.isEmpty()) mine?.let { myMateDrawable(it.look) }
+                else MateDrawable(mates.map { MateDrawable.Mate(it.stage, MateDrawable.colorFor(it.id)) }),
+            )
+        }
+        renderChips()
+        val progress = guide.progress()
+        progressBar.show(progress != null)
+        progress?.let { progressBar.progress = (it * PROGRESS_MAX).roundToInt() }
+        val order = guide.order()
+        orderText.show(order != null)
+        order?.let { (now, all) -> orderText.update((1..all).joinToString(" ") { if (it == now) "●" else "○" } + "  $now/$all") }
+        renderTrip()
 
         strip.pins = guide.shownAhead().map {
             RoadStripView.Pin(it.message.id, (it.distanceM / 10).roundToInt() * 10, it.message.stage, guide.isHighlighted(it.message.id))
@@ -335,7 +455,7 @@ class MainActivity : Activity(), GleoActions.Target {
         listenButton.show(prompting)
         // 묻는 중에는 "넘기기", 묶음을 듣는 중에는 "다음 한마디". 둘 다 핸들의 다음 곡 버튼과 같다.
         skipButton.show(prompting || guide.hasNext)
-        skipButton.setLabel(if (prompting) "넘기기" else "다음 한마디")
+        skipButton.setLabel(if (prompting) "지나갈게요" else "다음 길동무")
         stopButton.show(listening)
         thanksButton.show(phase == GuideController.Phase.PLAYING || phase == GuideController.Phase.AFTER || (phase == GuideController.Phase.IDLE && guide.lastHeard != null))
         thanksButton.setLabel(guide.lastThanks?.let { "고마워요 ${it.thanksCount}" } ?: "고마워요")
@@ -351,18 +471,75 @@ class MainActivity : Activity(), GleoActions.Target {
         // 듣는 중에는 녹음하지 않는다. 녹음 중에는 끝내기 버튼으로 쓴다.
         val recording = record.phase == RecordController.Phase.RECORDING
         recordText.update(record.statusText())
-        recordButton.look = if (recording) Look.REC else Look.SEED
-        recordButton.setLabel(if (recording) "녹음 끝내기" else "한마디 남기기")
+        recordButton.look = if (recording) ButtonLook.REC else ButtonLook.SEED
+        recordButton.setLabel(if (recording) "녹음 끝내기" else "나도 한마디 남기기")
         recordButton.setIcon(if (recording) R.drawable.ic_stop else R.drawable.ic_mic)
         recordButton.isEnabled = recording ||
             (record.phase == RecordController.Phase.IDLE && phase == GuideController.Phase.IDLE)
+        val heard = myMessages.items.sumOf { it.listenCount }
+        myStat.update(if (myMessages.items.isEmpty()) "아직 남긴 한마디가 없어요" else "내 한마디를 ${heard}명이 들었어요")
     }
+
+    /** 카드의 작은 표시: 언제·비 오는 날·고마워요·들은 수. 바뀔 때만 다시 만든다. */
+    private fun renderChips() {
+        val chips = guide.contextMessage()?.let { ContextWords.chips(it) }.orEmpty()
+        val key = chips.joinToString("|")
+        if (key == chipsKey) return
+        chipsKey = key
+        chipsRow.removeAllViews()
+        chips.forEach { chip ->
+            chipsRow.addView(
+                text(chip, 20f, maxLines = 1).apply {
+                    background = rounded(R.color.gd_road, 20)
+                    setPadding(dp(16), dp(6), dp(16), dp(6))
+                },
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) },
+            )
+        }
+        chipsRow.show(chips.isNotEmpty())
+    }
+
+    /** "이번 길" 타일: 만난 길동무, 전한 고마워요, 그다음 길동무. */
+    private fun renderTrip() {
+        val trip = guide.trip()
+        metText.update("길동무 ${trip.met}명")
+        thankedText.update("고마워요 ${trip.thanked}번")
+        val next = guide.nextAhead()
+        nextText.update(
+            next.firstOrNull()?.let { a ->
+                val who = when {
+                    next.size > 1 -> "${next.size}명"
+                    a.message.stage == Stage.FLOWER -> "꽃 든 길동무"
+                    else -> "길동무"
+                }
+                "${(a.distanceM / 10).roundToInt() * 10}m · $who"
+            } ?: "아직 없어요",
+        )
+    }
+
+    /** 머리줄·남기기 옆·설정의 내 길동무. 모습이 바뀔 때만 다시 그린다. */
+    private fun renderMyMate() {
+        val mine = myProfile
+        headerName.update(mine?.nickname.orEmpty())
+        myName.update(mine?.nickname ?: "내 길동무")
+        settingsName.update(mine?.nickname ?: "아직 정하지 않았어요")
+        val key = mine?.let { "${it.look.color}:${it.look.item}" } ?: "none"
+        if (key == myMateKey) return
+        myMateKey = key
+        val look = mine?.look ?: Look(0, com.gildongmu.app.data.LookItem.NONE)
+        headerMate.setImageDrawable(myMateDrawable(look))
+        myMate.setImageDrawable(myMateDrawable(look))
+        settingsMate.setImageDrawable(myMateDrawable(look))
+        headerMate.show(mine != null)
+    }
+
+    private fun myMateDrawable(look: Look) = MateDrawable(Stage.SPROUT, MateDrawable.bodyColor(look.color), look.item)
 
     private fun renderGarden() {
         val news = myMessages.news
         newsText.update(news.orEmpty())
         newsText.visibility = if (news == null) View.GONE else View.VISIBLE
-        bloomText.update(MyMessages.bloomSummary(myMessages.items) ?: "아직 남긴 한마디가 없어요. 운전하다 떠오른 한마디를 남겨 보세요.")
+        bloomText.update(MyMessages.bloomSummary(myMessages.items) ?: "아직 남긴 발자취가 없어요. 운전하다 떠오른 한마디를 길 위에 남겨 보세요.")
 
         val items = myMessages.items.take(GARDEN_TILES)
         val key = items.joinToString { "${it.id}:${it.stage}:${it.review}:${it.listenCount}:${it.thanksCount}" }
@@ -389,6 +566,7 @@ class MainActivity : Activity(), GleoActions.Target {
 
     private fun buildLayout(): View {
         gardenKey = ""
+        shownMates = emptyList()
         window.setBackgroundDrawable(ColorDrawable(getColor(R.color.gd_bg)))
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -403,15 +581,17 @@ class MainActivity : Activity(), GleoActions.Target {
         }
         header.addView(text("길동무", 30f, medium = true))
         header.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f))
+        headerMate = ImageView(this).also { header.addView(it, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(8) }) }
+        headerName = text("", 22f, medium = true, maxLines = 1).also { header.addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(20) }) }
         modeText = text("", 22f, R.color.gd_text_sub).also { header.addView(it) }
         root.addView(header)
 
         // 탭: 정차 중에만
         tabBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         tabButtons = linkedMapOf(
-            Tab.ROAD to ActionButton(this, "길", R.drawable.ic_route, Look.SELECTED, textSp = 24f),
-            Tab.GARDEN to ActionButton(this, "내 꽃밭", R.drawable.ic_florist, Look.OUTLINE, textSp = 24f),
-            Tab.SETTINGS to ActionButton(this, "설정", R.drawable.ic_settings, Look.OUTLINE, textSp = 24f),
+            Tab.ROAD to ActionButton(this, "길", R.drawable.ic_route, ButtonLook.SELECTED, textSp = 24f),
+            Tab.GARDEN to ActionButton(this, "내 발자취", R.drawable.ic_florist, ButtonLook.OUTLINE, textSp = 24f),
+            Tab.SETTINGS to ActionButton(this, "설정", R.drawable.ic_settings, ButtonLook.OUTLINE, textSp = 24f),
         )
         tabButtons.forEach { (t, button) ->
             button.onClick { tab = t; render() }
@@ -426,6 +606,10 @@ class MainActivity : Activity(), GleoActions.Target {
             Tab.SETTINGS to buildSettingsPage(),
         )
         pages.values.forEach { content.addView(it, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)) }
+        profilePage = FrameLayout(this).apply { visibility = View.GONE }
+        content.addView(profilePage, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        chipsKey = ""
+        myMateKey = ""
         root.addView(content, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(20) })
         return root
     }
@@ -446,31 +630,58 @@ class MainActivity : Activity(), GleoActions.Target {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        stageIcon = ImageView(this).also { top.addView(it, LinearLayout.LayoutParams(dp(88), dp(88)).apply { marginEnd = dp(24) }) }
+        stageIcon = ImageView(this).also { top.addView(it, LinearLayout.LayoutParams(dp(200), dp(200)).apply { marginEnd = dp(32) }) }
         val words = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        titleText = text("", 36f, medium = true, maxLines = 2).also { words.addView(it) }
+        chipsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }.also { words.addView(it, margins(bottom = 12)) }
+        titleText = text("", 40f, medium = true, maxLines = 2).also { words.addView(it) }
         detailText = text("", 22f, R.color.gd_text_sub, maxLines = 2).also { words.addView(it, margins(top = 8)) }
+        // 듣는 중: 진행 막대와 묶음 순서(1초마다 칸만 바뀌어 주행 중에도 쓸 수 있다)
+        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = PROGRESS_MAX
+            isIndeterminate = false
+            progressTintList = ColorStateList.valueOf(getColor(R.color.gd_highlight))
+            progressBackgroundTintList = ColorStateList.valueOf(getColor(R.color.gd_road))
+        }
+        words.addView(progressBar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(16)).apply { topMargin = dp(16) })
+        orderText = text("", 22f, R.color.gd_text_sub, maxLines = 1).also { words.addView(it, margins(top = 8)) }
         top.addView(words, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         card.addView(top)
         actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        listenButton = ActionButton(this, "듣기", R.drawable.ic_play, Look.GO).apply { onClick { guide.accept() } }
-        skipButton = ActionButton(this, "넘기기", R.drawable.ic_skip, Look.OUTLINE).apply { onClick { guide.skip() } }
-        stopButton = ActionButton(this, "그만 듣기", R.drawable.ic_stop, Look.OUTLINE).apply { onClick { guide.stop() } }
-        thanksButton = ActionButton(this, "고마워요", R.drawable.ic_favorite, Look.OUTLINE).apply { onClick { guide.thanks() } }
+        listenButton = ActionButton(this, "들어 볼게요", R.drawable.ic_play, ButtonLook.GO).apply { onClick { guide.accept() } }
+        skipButton = ActionButton(this, "지나갈게요", R.drawable.ic_skip, ButtonLook.OUTLINE).apply { onClick { guide.skip() } }
+        stopButton = ActionButton(this, "그만 들을게요", R.drawable.ic_stop, ButtonLook.OUTLINE).apply { onClick { guide.stop() } }
+        thanksButton = ActionButton(this, "고마워요", R.drawable.ic_favorite, ButtonLook.OUTLINE).apply { onClick { guide.thanks() } }
         // 한 번에 보이는 버튼은 많아야 셋이다. 보이지 않는 버튼 앞의 간격은 그 버튼과 함께 사라진다.
         listOf(listenButton, thanksButton, skipButton, stopButton).forEach { button ->
             actions.addView(button, LinearLayout.LayoutParams(0, dp(104), 1f).apply { marginEnd = dp(16) })
         }
         card.addView(actions, margins(top = 40))
 
-        // 남기기: 상태 한 줄 + 가장 큰 버튼
+        // "이번 길" 타일: Pleos 기본 앱처럼 이름 한 줄 + 값 한 줄
+        val tiles = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        metText = tile(tiles, "이번 길에서 만난")
+        thankedText = tile(tiles, "내가 전한")
+        nextText = tile(tiles, "그다음 길동무", last = true)
+
+        // 남기기: 상태 한 줄 + 내 길동무 + 가장 큰 버튼
         val recordArea = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         recordText = text("", 22f, R.color.gd_text_sub, maxLines = 2).also { recordArea.addView(it) }
-        recordButton = ActionButton(this, "한마디 남기기", R.drawable.ic_mic, Look.SEED, textSp = 30f).apply { onClick { onRecordPressed() } }
-        recordArea.addView(recordButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(112)).apply { topMargin = dp(12) })
+        val recordRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        myMate = ImageView(this).also { recordRow.addView(it, LinearLayout.LayoutParams(dp(96), dp(96))) }
+        val me = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        myName = text("", 26f, medium = true, maxLines = 1).also { me.addView(it) }
+        myStat = text("", 20f, R.color.gd_text_sub, maxLines = 1).also { me.addView(it) }
+        recordRow.addView(me, LinearLayout.LayoutParams(dp(320), LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(12) })
+        recordButton = ActionButton(this, "나도 한마디 남기기", R.drawable.ic_mic, ButtonLook.SEED, textSp = 30f).apply { onClick { onRecordPressed() } }
+        recordRow.addView(recordButton, LinearLayout.LayoutParams(0, dp(112), 1f).apply { marginStart = dp(16) })
+        recordArea.addView(recordRow, margins(top = 12))
 
         val side = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         side.addView(card, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        side.addView(tiles, margins(top = 20))
         side.addView(recordArea, margins(top = 20))
 
         // 가로로 넓으면 띠를 왼쪽에 세우고, 세로로 길면(화면 나누기) 위에 눕힌다.
@@ -487,6 +698,19 @@ class MainActivity : Activity(), GleoActions.Target {
         }
     }
 
+    /** 타일 하나를 붙이고 값 글자를 돌려준다. */
+    private fun tile(parent: LinearLayout, label: String, last: Boolean = false): TextView {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(R.color.gd_surface, 24)
+            setPadding(dp(28), dp(20), dp(28), dp(20))
+        }
+        box.addView(text(label, 20f, R.color.gd_text_sub, maxLines = 1))
+        val value = text("", 30f, medium = true, maxLines = 1).also { box.addView(it, margins(top = 4)) }
+        parent.addView(box, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { if (!last) marginEnd = dp(16) })
+        return value
+    }
+
     private fun buildGardenPage(): View {
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         newsText = text("", 28f, medium = true).also { column.addView(it, margins(bottom = 8)) }
@@ -501,24 +725,50 @@ class MainActivity : Activity(), GleoActions.Target {
         background = rounded(R.color.gd_surface, 24)
         setPadding(dp(20), dp(24), dp(20), dp(24))
         layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(8), dp(8), dp(8), dp(8)) }
-        addView(ImageView(this@MainActivity).apply { setImageResource(StageIcon.of(m.stage)) }, LinearLayout.LayoutParams(dp(80), dp(80)))
-        addView(text("${m.kind.label} · ${m.stage.label}", 24f, medium = true, maxLines = 1).apply { gravity = Gravity.CENTER }, margins(top = 12))
+        addView(ImageView(this@MainActivity).apply { setImageDrawable(MateDrawable(m.stage, MateDrawable.colorFor(m.id))) }, LinearLayout.LayoutParams(dp(88), dp(88)))
+        addView(text(if (m.kind == Kind.UNKNOWN) "한마디" else "${m.kind.label} 한마디", 24f, medium = true, maxLines = 1).apply { gravity = Gravity.CENTER }, margins(top = 12))
+        addView(text(stageLine(m), 20f, R.color.gd_text_sub, maxLines = 1).apply { gravity = Gravity.CENTER }, margins(top = 4))
         addView(text("들은 ${m.listenCount}명 · 고마워요 ${m.thanksCount}", 20f, R.color.gd_text_sub, maxLines = 1).apply { gravity = Gravity.CENTER }, margins(top = 4))
-        if (m.review != Review.CLEAN) {
-            addView(text(m.review.label, 20f, R.color.gd_text_sub, maxLines = 1).apply { gravity = Gravity.CENTER })
-        }
+    }
+
+    /** 내 발자취 칸의 한 줄: 내 길동무가 지금 어떤 모습인지. 검수 결과가 특별하면 그걸 보여준다. */
+    private fun stageLine(m: MyMessage): String = when {
+        m.review != Review.CLEAN && m.review != Review.PENDING -> m.review.label
+        m.stage == Stage.SEED -> "확인 중이에요"
+        m.stage == Stage.SPROUT -> "길 위에 섰어요"
+        m.stage == Stage.FLOWER -> "꽃을 들었어요"
+        else -> "추억이 됐어요"
     }
 
     private fun buildSettingsPage(): View {
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
-        filterButton = ActionButton(this, "켜짐 · 끄기", R.drawable.ic_settings, Look.OUTLINE, textSp = 24f).apply { onClick { onFilterPressed() } }
+        // 내 길동무: 닉네임은 내 차에서만 보인다.
+        val mateCard = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(R.color.gd_surface, 24)
+            setPadding(dp(28), dp(20), dp(28), dp(20))
+        }
+        settingsMate = ImageView(this).also { mateCard.addView(it, LinearLayout.LayoutParams(dp(96), dp(96))) }
+        val mateWords = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        mateWords.addView(text("내 길동무", 20f, R.color.gd_text_sub))
+        settingsName = text("", 28f, medium = true, maxLines = 1).also { mateWords.addView(it) }
+        mateWords.addView(text("닉네임은 내 차에서만 보여요. 한 달에 한 번 바꿀 수 있어요.", 20f, R.color.gd_text_sub), margins(top = 4))
+        mateCard.addView(mateWords, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(20) })
+        val change = ActionButton(this, "바꾸기", R.drawable.ic_settings, ButtonLook.OUTLINE, textSp = 24f).apply {
+            onClick { if (!drivingMode.driving) openEditor(firstRun = myProfile == null) }
+        }
+        mateCard.addView(change, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(88)).apply { marginStart = dp(24) })
+        column.addView(mateCard, margins(bottom = 16))
+
+        filterButton = ActionButton(this, "켜짐 · 끄기", R.drawable.ic_settings, ButtonLook.OUTLINE, textSp = 24f).apply { onClick { onFilterPressed() } }
         column.addView(settingCard("비속어 필터", "켜 두면 거친 말이 섞인 한마디는 들려주지 않아요.", filterButton))
-        voiceButton = ActionButton(this, "켜짐 · 끄기", R.drawable.ic_mic, Look.OUTLINE, textSp = 24f).apply { onClick { onVoicePressed() } }
+        voiceButton = ActionButton(this, "켜짐 · 끄기", R.drawable.ic_mic, ButtonLook.OUTLINE, textSp = 24f).apply { onClick { onVoicePressed() } }
         column.addView(
             settingCard(
                 "말로 대답하기",
-                "\"들을까요?\"에 \"응\"·\"넘겨\", 듣고 나서 \"고마워\"라고 말하면 돼요. 마이크는 대답을 기다리는 몇 초 동안만 켜져요.",
+                "\"들어 볼까요?\"에 \"응\"·\"지나가\", 듣고 나서 \"고마워\"라고 말하면 돼요. 마이크는 대답을 기다리는 몇 초 동안만 켜져요.",
                 voiceButton,
             ),
             margins(top = 16),
@@ -593,6 +843,7 @@ class MainActivity : Activity(), GleoActions.Target {
         private const val REQUEST_RECORD = 2
         private const val REQUEST_VOICE = 3
         private const val GLEO_RECORD_DELAY_MS = 1_200L
+        private const val PROGRESS_MAX = 1_000
         private const val GARDEN_TILES = 12
     }
 }

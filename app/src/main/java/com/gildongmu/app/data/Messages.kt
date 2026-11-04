@@ -67,6 +67,11 @@ data class NearbyMessage(
     val durationMs: Int,
     val thanksCount: Int,
     val audioUrl: String,
+    /** 카드의 작은 표시("어제 저녁 · 비 오는 날 · 37명이 들음")에 쓴다. 남긴 사람은 싣지 않는다. */
+    val listenCount: Int = 0,
+    val recordedAt: String = "",
+    val wiperOn: Boolean? = null,
+    val headlightOn: Boolean? = null,
 )
 
 data class NearbyResult(
@@ -109,3 +114,21 @@ data class ThanksResult(
 
 /** 서버가 돌려준 오류. `code`는 docs/api.md 1장의 오류 코드, `message`는 서버가 쓴 한국어 문장이다. */
 class ApiException(val status: Int, val code: String, message: String) : Exception(message)
+
+/** 내 길동무가 걸친 소품. `wire`는 서버 값이다 (docs/api.md 3.9). */
+enum class LookItem(val wire: String, val label: String) {
+    NONE("none", "없음"),
+    HAT("hat", "모자"),
+    SCARF("scarf", "목도리"),
+    BACKPACK("backpack", "배낭");
+
+    companion object {
+        fun of(wire: String) = entries.firstOrNull { it.wire == wire } ?: NONE
+    }
+}
+
+/** 내 길동무 모습: 몸 색(0~5)과 소품. */
+data class Look(val color: Int, val item: LookItem)
+
+/** 내 길동무. 닉네임은 내 기기에서만 보인다. `nextChangeAt`은 닉네임을 다시 바꿀 수 있는 시각(ISO-8601). */
+data class Profile(val nickname: String, val look: Look, val nextChangeAt: String?)

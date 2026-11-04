@@ -26,6 +26,9 @@ var statusByCode = map[string]int{
 	"PAYLOAD_TOO_LARGE":      http.StatusRequestEntityTooLarge,
 	"UNSUPPORTED_MEDIA_TYPE": http.StatusUnsupportedMediaType,
 	"RATE_LIMITED":           http.StatusTooManyRequests,
+	"NICKNAME_NOT_ALLOWED":   http.StatusBadRequest,
+	// 30일이 지나야 바꿀 수 있다. 같은 요청을 지금 다시 보내도 결과가 같으므로 409로 둔다.
+	"NICKNAME_CHANGE_TOO_SOON": http.StatusConflict,
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

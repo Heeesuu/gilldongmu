@@ -30,6 +30,14 @@ type MessageRepository interface {
 	ApplyListen(ctx context.Context, id string, completed bool, expiresAt *time.Time) error
 }
 
+// ProfileRepository는 내 길동무(닉네임과 모습) 저장소다.
+type ProfileRepository interface {
+	// Get은 기기의 프로필을 찾는다. 아직 없으면 nil, nil이다.
+	Get(ctx context.Context, deviceID string) (*domain.Profile, error)
+	// Save는 새로 만들거나 덮어쓴다.
+	Save(ctx context.Context, p *domain.Profile) error
+}
+
 // UnitOfWork는 여러 저장 작업을 한 트랜잭션으로 묶는다.
 type UnitOfWork interface {
 	Do(ctx context.Context, fn func(repo MessageRepository) error) error

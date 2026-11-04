@@ -32,6 +32,7 @@ type Env struct {
 	Repo       *repository.MessageRepository
 	Messages   *usecase.MessageUsecase
 	Moderation *usecase.ModerationUsecase
+	Profiles   *usecase.ProfileUsecase
 	Queue      *FakeQueue
 	Clock      *FakeClock
 	STT        *FakeSTT
@@ -72,6 +73,7 @@ func NewEnv(t *testing.T) *Env {
 	}
 	env.Messages = usecase.NewMessageUsecase(repo, repository.NewUnitOfWork(db), env.Queue, env.Clock.Now, newID)
 	env.Moderation = usecase.NewModerationUsecase(repo, env.STT, env.Judge, moderation.NewDictionaryFrom("씨발\n"), false)
+	env.Profiles = usecase.NewProfileUsecase(repository.NewProfileRepository(db), moderation.NewDictionaryFrom("씨발\n"), env.Clock.Now)
 	return env
 }
 

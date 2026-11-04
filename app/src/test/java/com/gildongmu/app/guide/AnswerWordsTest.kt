@@ -12,7 +12,7 @@ class AnswerWordsTest {
         listOf("응", "응.", "어", "네", "예", "그래", "좋아", "들어볼게", "들려줘", "틀어 줘", "오케이").forEach {
             assertEquals(it, Answer.LISTEN, AnswerWords.match(it))
         }
-        listOf("아니", "아니요", "됐어", "괜찮아요", "넘겨", "다음", "패스", "안 들을래", "다음에 들을게").forEach {
+        listOf("아니", "아니요", "됐어", "괜찮아요", "넘겨", "지나갈게요", "다음", "패스", "안 들을래", "다음에 들을게").forEach {
             assertEquals(it, Answer.SKIP, AnswerWords.match(it))
         }
     }

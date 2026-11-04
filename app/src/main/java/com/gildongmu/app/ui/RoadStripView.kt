@@ -8,13 +8,12 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.view.View
 import com.gildongmu.app.R
-import com.gildongmu.app.StageIcon
 import com.gildongmu.app.data.Stage
 import kotlin.math.abs
 import kotlin.math.min
 
 /**
- * 길 띠: 앞쪽 600m 길 위에 한마디가 어디 놓였는지 보여준다 (디자인 B안 "길 위의 방명록").
+ * 길 띠: 앞쪽 600m 길 위에 한마디를 남긴 길동무가 어디 서 있는지 보여준다 (디자인 "길동무").
  * 주행 중에도 보이므로 움직이는 그림은 쓰지 않고, 값이 바뀔 때만 다시 그린다 (Pleos 주행 규제).
  * 세로로 길면 차가 아래·앞쪽이 위이고, 가로로 길면(화면 나누기 등) 차가 왼쪽·앞쪽이 오른쪽이다.
  */
@@ -41,8 +40,7 @@ class RoadStripView(context: Context) : View(context) {
         pathEffect = DashPathEffect(floatArrayOf(dp(18f), dp(14f)), 0f)
     }
     private val carPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = context.getColor(R.color.gd_text) }
-    private val pinPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = context.getColor(R.color.gd_pin_bg) }
-    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val groundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = context.getColor(R.color.gd_text_sub)
         textSize = 22f * scaled
@@ -52,20 +50,14 @@ class RoadStripView(context: Context) : View(context) {
         typeface = Typeface.create(Typeface.DEFAULT, 500, false)
     }
     private val carIcon = context.getDrawable(R.drawable.ic_car)!!.mutate().apply { setTint(context.getColor(R.color.gd_bg)) }
-    private val stageColors = mapOf(
-        Stage.SEED to context.getColor(R.color.gd_stage_seed),
-        Stage.SPROUT to context.getColor(R.color.gd_stage_sprout),
-        Stage.FLOWER to context.getColor(R.color.gd_stage_flower),
-        Stage.MEMORY to context.getColor(R.color.gd_stage_memory),
-    )
     private val badgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = context.getColor(R.color.gd_text) }
     private val badgeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = context.getColor(R.color.gd_bg)
         textSize = 18f * scaled
         typeface = Typeface.create(Typeface.DEFAULT, 500, false)
     }
-    private val stageIcons = Stage.entries.associateWith { context.getDrawable(StageIcon.of(it))!! }
     private val highlightColor = context.getColor(R.color.gd_highlight)
+    private val pinBg = context.getColor(R.color.gd_pin_bg)
     private val rect = RectF()
 
     override fun onDraw(canvas: Canvas) {
@@ -101,15 +93,18 @@ class RoadStripView(context: Context) : View(context) {
         val end = if (vertical) dp(44f) else w - dp(44f)
         fun along(distanceM: Int) = start + (end - start) * (distanceM.coerceIn(0, LOOKAHEAD_M) / LOOKAHEAD_M.toFloat())
 
-        // 화면에서 겹칠 만큼 가까운 한마디는 하나로 모아 가장 가까운 것만 그리고 개수를 붙인다.
-        // 먼 묶음부터 그려서 가까운(곧 닿을) 묶음이 위에 온다.
+        // 가까이 모인 길동무는 한 자리에 셋까지 겹쳐 세우고 사람 수를 붙인다.
+        // 먼 자리부터 그려서 가까운(곧 닿을) 자리가 위에 온다.
         clusters(pins.sortedBy { it.distanceM }) { along(it.distanceM) }.reversed().forEach { group ->
             val pin = group.first()
             val at = along(pin.distanceM)
             val (x, y) = if (vertical) w * 0.36f to at else at to h * 0.40f
             val highlighted = group.any { it.highlighted }
-            drawPin(canvas, pin.stage, highlighted, x, y, group.size)
-            drawLabel(canvas, if (group.size > 1) "${pin.distanceM}m · ${group.size}건" else "${pin.distanceM}m", highlighted, x, y, road, vertical)
+            // 여럿이 선 자리는 겹쳐 그리므로 한 명일 때보다 크게 잡는다.
+            val box = dp((if (group.size > 1) 88f else 68f) + if (highlighted) 16f else 0f)
+            drawMates(canvas, group, highlighted, x, y, box)
+            // 세로 띠에서는 글자를 길동무 몸 높이에, 가로 띠에서는 발밑 아래에 둔다.
+            drawLabel(canvas, if (group.size > 1) "${pin.distanceM}m · ${group.size}명" else "${pin.distanceM}m", highlighted, x, if (vertical) y - box * 0.4f else y, road, vertical)
         }
     }
 
@@ -128,22 +123,20 @@ class RoadStripView(context: Context) : View(context) {
         return groups
     }
 
-    private fun drawPin(canvas: Canvas, stage: Stage, highlighted: Boolean, x: Float, y: Float, count: Int) {
-        val radius = dp(if (highlighted) 38f else 30f)
-        canvas.drawCircle(x, y, radius, pinPaint)
-        ringPaint.color = if (highlighted) highlightColor else stageColors.getValue(stage)
-        ringPaint.strokeWidth = dp(if (highlighted) 7f else 5f)
-        canvas.drawCircle(x, y, radius, ringPaint)
-        val icon = stageIcons.getValue(stage)
-        val half = (radius * 0.72f).toInt()
-        icon.setBounds(x.toInt() - half, y.toInt() - half, x.toInt() + half, y.toInt() + half)
-        icon.draw(canvas)
-        if (count > 1) {
-            // 오른쪽 위에 개수 배지
-            val bx = x + radius * 0.75f
-            val by = y - radius * 0.75f
+    /** 길동무가 선 자리: 발밑 그림자(지금 묻거나 듣는 자리는 초록) 위에 길동무를 세운다. 발이 (x, y)에 닿는다. */
+    private fun drawMates(canvas: Canvas, group: List<Pin>, highlighted: Boolean, x: Float, y: Float, box: Float) {
+        groundPaint.color = if (highlighted) highlightColor else pinBg
+        rect.set(x - box * 0.44f, y - box * 0.1f, x + box * 0.44f, y + box * 0.14f)
+        canvas.drawOval(rect, groundPaint)
+        val figure = MateDrawable(group.map { MateDrawable.Mate(it.stage, MateDrawable.colorFor(it.id)) })
+        figure.setBounds((x - box / 2).toInt(), (y - box * 0.94f).toInt(), (x + box / 2).toInt(), (y + box * 0.06f).toInt())
+        figure.draw(canvas)
+        if (group.size > 1) {
+            // 오른쪽 위에 사람 수
+            val bx = x + box * 0.44f
+            val by = y - box * 0.86f
             canvas.drawCircle(bx, by, dp(16f), badgePaint)
-            canvas.drawText("$count", bx - badgeTextPaint.measureText("$count") / 2, by + badgeTextPaint.textSize * 0.36f, badgeTextPaint)
+            canvas.drawText("${group.size}", bx - badgeTextPaint.measureText("${group.size}") / 2, by + badgeTextPaint.textSize * 0.36f, badgeTextPaint)
         }
     }
 
@@ -157,14 +150,14 @@ class RoadStripView(context: Context) : View(context) {
     }
 
     private fun describe(pins: List<Pin>): String =
-        if (pins.isEmpty()) "앞쪽 길에 한마디가 없어요"
-        else "앞쪽 길 한마디 ${pins.size}개: " + pins.joinToString(", ") { "${it.distanceM}m ${it.stage.label}" }
+        if (pins.isEmpty()) "앞쪽 길은 아직 조용해요"
+        else "앞쪽 길에 한마디를 남긴 길동무 ${pins.size}명: " + pins.joinToString(", ") { "${it.distanceM}m ${it.stage.label}" }
 
     private fun dp(value: Float) = value * density
 
     companion object {
         const val LOOKAHEAD_M = 600
-        private const val CLUSTER_DP = 56f
+        private const val CLUSTER_DP = 76f
         private const val GROUP_M = 50
     }
 }
