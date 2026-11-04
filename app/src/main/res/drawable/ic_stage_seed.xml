@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 씨앗: 검수 중. 흙 위에 놓인 씨앗 하나. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#8D6E63"
+        android:pathData="M6,38h36a2,2 0,0 1,0 4H6a2,2 0,0 1,0 -4z" />
+    <path
+        android:fillColor="#BCAAA4"
+        android:pathData="M24,19c5,0 8,4.5 8,9.5s-3.6,8.5 -8,8.5 -8,-3.5 -8,-8.5 3,-9.5 8,-9.5z" />
+    <path
+        android:fillColor="#6D4C41"
+        android:pathData="M24,22.5c1.2,2.5 1.2,9 0,12c-1.2,-3 -1.2,-9.5 0,-12z" />
+</vector>
