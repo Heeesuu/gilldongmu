@@ -55,18 +55,29 @@ class GuidePolicyTest {
         val near = Approach(message, distanceM = 100.0, etaSec = 9.0)
         val stopped = Approach(message, distanceM = 30.0, etaSec = null)
 
-        assertNull(policy.pickPrompt(listOf(far), nowMs = 0L, lastPromptAtMs = null))
-        assertNull("멈춰 있으면 도착 시간을 모르므로 묻지 않는다", policy.pickPrompt(listOf(stopped), 0L, null))
-        assertEquals(near, policy.pickPrompt(listOf(near), nowMs = 0L, lastPromptAtMs = null))
-        assertNull(policy.pickPrompt(listOf(near), nowMs = 4 * 60_000L, lastPromptAtMs = 0L))
-        assertEquals(near, policy.pickPrompt(listOf(near), nowMs = 5 * 60_000L, lastPromptAtMs = 0L))
+        assertTrue(policy.pickPrompt(listOf(far), nowMs = 0L, lastPromptAtMs = null).isEmpty())
+        assertTrue("멈춰 있으면 도착 시간을 모르므로 묻지 않는다", policy.pickPrompt(listOf(stopped), 0L, null).isEmpty())
+        assertEquals(listOf(near), policy.pickPrompt(listOf(near), nowMs = 0L, lastPromptAtMs = null))
+        assertTrue(policy.pickPrompt(listOf(near), nowMs = 4 * 60_000L, lastPromptAtMs = 0L).isEmpty())
+        assertEquals(listOf(near), policy.pickPrompt(listOf(near), nowMs = 5 * 60_000L, lastPromptAtMs = 0L))
     }
 
     @Test
-    fun `첫 번째 후보 순서는 서버 순서를 따른다`() {
-        val flowerFar = Approach(message.copy(id = "flower"), distanceM = 400.0, etaSec = 36.0)
+    fun `서버 순서와 상관없이 가장 먼저 닿는 한마디에 묻는다`() {
+        val flowerFar = Approach(message.copy(id = "flower", lat = 37.5700), distanceM = 400.0, etaSec = 36.0)
         val sproutNear = Approach(message.copy(id = "sprout"), distanceM = 100.0, etaSec = 9.0)
-        assertNull("서버가 꽃을 먼저 주면 꽃이 가까워질 때까지 기다린다", policy.pickPrompt(listOf(flowerFar, sproutNear), 0L, null))
+        assertEquals(listOf(sproutNear), policy.pickPrompt(listOf(flowerFar, sproutNear), 0L, null))
+    }
+
+    @Test
+    fun `가장 먼저 닿는 한마디에서 50m 안에 모인 한마디는 한 번에 묻는다`() {
+        // 위도 0.0001도는 약 11m. 0~44m 안에 다섯 개, 약 111m 떨어진 곳에 하나.
+        val near = (0..4).map { i ->
+            Approach(message.copy(id = "m$i", lat = message.lat + i * 0.0001), distanceM = 100.0 + i * 11, etaSec = 9.0 + i)
+        }
+        val apart = Approach(message.copy(id = "apart", lat = message.lat + 0.001), distanceM = 211.0, etaSec = 19.0)
+        val picked = policy.pickPrompt(listOf(apart) + near.reversed(), 0L, null)
+        assertEquals("닿는 순서로 묶는다", near.map { it.message.id }, picked.map { it.message.id })
     }
 
     @Test
