@@ -71,6 +71,16 @@ class GuideAudio(context: Context, private val onFocusLost: () -> Unit) {
     val positionMs: Long
         get() = player?.let { runCatching { it.currentPosition.toLong() }.getOrNull() } ?: 0L
 
+    /**
+     * 내비 안내·통화·음성 비서가 지금 말하고 있는가. 그동안은 "들어 볼까요?"를 묻지 않는다.
+     * 차의 오디오 규칙상 미디어 소리가 내비 안내와 겹쳐 나올 수 있어서, 묻기 전에 직접 확인한다.
+     * 지금 재생 중인 소리의 용도만 본다(다른 앱의 내용은 볼 수 없다).
+     */
+    fun othersSpeaking(): Boolean {
+        if (audioManager.mode == AudioManager.MODE_IN_CALL || audioManager.mode == AudioManager.MODE_IN_COMMUNICATION) return true
+        return audioManager.activePlaybackConfigurations.any { it.audioAttributes.usage in SPEAKING_USAGES }
+    }
+
     /** 안내를 시작할 때 한 번 부른다. 포커스를 못 받으면(통화 중 등) false. */
     fun begin(): Boolean {
         if (hasFocus) return true
@@ -264,6 +274,11 @@ class GuideAudio(context: Context, private val onFocusLost: () -> Unit) {
     }
 
     companion object {
+        private val SPEAKING_USAGES = setOf(
+            AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE,
+            AudioAttributes.USAGE_VOICE_COMMUNICATION,
+            AudioAttributes.USAGE_ASSISTANT,
+        )
         private const val UTTERANCE_ID = "gildongmu-prompt"
         private const val SPEECH_TIMEOUT_MS = 6_000L
     }

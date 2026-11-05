@@ -22,7 +22,6 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
-import com.gildongmu.app.data.DeviceId
 import com.gildongmu.app.data.Kind
 import com.gildongmu.app.data.Look
 import com.gildongmu.app.data.Profile
@@ -33,12 +32,6 @@ import com.gildongmu.app.data.Settings
 import com.gildongmu.app.data.Stage
 import com.gildongmu.app.drive.DriveTracker
 import com.gildongmu.app.drive.DrivingMode
-import com.gildongmu.app.drive.VehicleSignals
-import com.gildongmu.app.gleo.GleoActions
-import com.gildongmu.app.gleo.GleoCommand
-import com.gildongmu.app.gleo.GleoReply
-import com.gildongmu.app.gleo.GleoReply.Mode
-import com.gildongmu.app.gleo.GleoReply.Status
 import com.gildongmu.app.guide.GuideController
 import com.gildongmu.app.guide.SteeringKeys
 import com.gildongmu.app.record.MyMessages
@@ -58,20 +51,21 @@ import kotlin.math.roundToInt
  * - 빈 곳은 Pleos 기본 앱처럼 정보로 채운다: 카드의 작은 표시(언제·비·반응), "이번 길" 타일, 남기기 옆 내 길동무.
  * - 낮·밤 색은 차 설정을 따르고(values-night), 창이 세로로 길면(화면 나누기) 띠를 위로 눕힌다.
  */
-class MainActivity : Activity(), GleoActions.Target {
+class MainActivity : Activity() {
 
     private enum class Tab { ROAD, GARDEN, SETTINGS }
 
     private val ui = Handler(Looper.getMainLooper())
 
-    private lateinit var settings: Settings
-    private lateinit var api: ServerApi
-    private lateinit var guide: GuideController
-    private lateinit var tracker: DriveTracker
-    private lateinit var drivingMode: DrivingMode
-    private lateinit var vehicle: VehicleSignals
-    private lateinit var record: RecordController
-    private lateinit var myMessages: MyMessages
+    // 안내·녹음·위치는 화면 밖에서도 도는 Core에 있다(포그라운드 서비스가 살려 둔다). 화면은 읽어 그리기만 한다.
+    private lateinit var core: Core
+    private val settings: Settings get() = core.settings
+    private val api: ServerApi get() = core.api
+    private val guide: GuideController get() = core.guide
+    private val tracker: DriveTracker get() = core.tracker
+    private val drivingMode: DrivingMode get() = core.drivingMode
+    private val record: RecordController get() = core.record
+    private val myMessages: MyMessages get() = core.myMessages
 
     private lateinit var modeText: TextView
     private lateinit var headerMate: ImageView
@@ -131,6 +125,10 @@ class MainActivity : Activity(), GleoActions.Target {
     private var gardenKey = ""
     private val medium = Typeface.create(Typeface.DEFAULT, 500, false)
 
+    private val drivingListener: (Boolean) -> Unit = { onDrivingChanged(it) }
+    private val changedListener: () -> Unit = { render() }
+    private val releasedListener: () -> Unit = { finish() }
+
     private val refresh = object : Runnable {
         override fun run() {
             render()
@@ -140,37 +138,21 @@ class MainActivity : Activity(), GleoActions.Target {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        settings = Settings(this)
-        api = ServerApi(BuildConfig.SERVER_URL, DeviceId.get(this), BuildConfig.VERSION_NAME)
+        core = (application as GildongmuApp).core()
         myProfile = settings.profile
-        guide = GuideController(
-            this, api,
-            // 녹음하는 동안에는 "들을까요?"를 묻지 않는다.
-            canPrompt = { record.phase == RecordController.Phase.IDLE },
-            filterOn = { settings.filterOn },
-            voiceOn = { settings.voiceAnswer && hasMic() },
-            nickname = { myProfile?.nickname },
-        )
-        tracker = DriveTracker(this) {
-            guide.onDrive(it)
-            record.onDrive(it)
-        }
-        drivingMode = DrivingMode(this) { onDrivingChanged(it) }
-        vehicle = VehicleSignals(this)
-        myMessages = MyMessages(api)
-        record = RecordController(this, api, vehicle, currentDrive = { tracker.latest }) { id -> myMessages.track(id) }
+        core.onDrivingChanged = drivingListener
+        core.onChanged = changedListener
+        // 알림의 "끄기"로 안내를 끄면 화면도 닫는다.
+        core.onReleased = releasedListener
 
         setContentView(buildLayout())
-        GleoActions.target = this
-        EventLog.add("앱", "길동무 시작 · 서버 ${BuildConfig.SERVER_URL.ifEmpty { "(미설정)" }}")
-        drivingMode.connect()
-        vehicle.start()
-        myMessages.start()
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) tracker.start()
-        // 위치와, 말로 대답하기가 켜져 있으면 마이크도 처음에 한 번에 묻는다.
+        // 화면이 보일 때 시작해야 화면 밖에서도 위치를 받는다(GuideService 설명 참고).
+        GuideService.start(this)
+        // 위치·알림과, 말로 대답하기가 켜져 있으면 마이크도 처음에 한 번에 묻는다.
         val missing = listOfNotNull(
             Manifest.permission.ACCESS_FINE_LOCATION.takeIf { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED },
             Manifest.permission.ACCESS_COARSE_LOCATION.takeIf { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED },
+            Manifest.permission.POST_NOTIFICATIONS.takeIf { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED },
             Manifest.permission.RECORD_AUDIO.takeIf { settings.voiceAnswer && !hasMic() },
         )
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), REQUEST_START)
@@ -252,15 +234,15 @@ class MainActivity : Activity(), GleoActions.Target {
         super.onPause()
     }
 
+    /** 화면만 닫는다. 안내는 Core(포그라운드 서비스)에서 계속 돈다. 끄려면 알림의 "끄기". */
     override fun onDestroy() {
-        if (GleoActions.target === this) GleoActions.target = null
         filterDialog?.dismiss()
-        record.release()
-        myMessages.stop()
-        vehicle.stop()
-        drivingMode.disconnect()
-        tracker.stop()
-        guide.release()
+        // 새 화면이 먼저 등록했을 수 있으므로, 내가 등록한 것만 지운다.
+        if (core.onChanged === changedListener) {
+            core.onDrivingChanged = null
+            core.onChanged = null
+            core.onReleased = null
+        }
         super.onDestroy()
     }
 
@@ -281,65 +263,20 @@ class MainActivity : Activity(), GleoActions.Target {
         val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
         when (requestCode) {
             REQUEST_START -> {
-                if (!tracker.start()) EventLog.add("권한", "위치 권한이 있어야 앞쪽 한마디를 찾을 수 있어요")
+                // 새로 받은 권한에 맞춰 서비스 종류를 다시 맞추고 위치를 받기 시작한다.
+                GuideService.start(this)
+                if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                    EventLog.add("권한", "위치 권한이 있어야 앞쪽 한마디를 찾을 수 있어요")
+                }
                 if (settings.voiceAnswer && !hasMic()) EventLog.add("권한", "마이크 권한이 없으면 버튼으로만 대답할 수 있어요")
             }
             // 남기기 버튼을 눌러서 권한을 물었으므로, 허용되면 바로 녹음을 시작한다.
-            REQUEST_RECORD -> if (granted) record.toggle() else EventLog.add("권한", "마이크 권한이 있어야 한마디를 남길 수 있어요")
+            REQUEST_RECORD -> if (granted) {
+                GuideService.start(this)
+                record.toggle()
+            } else EventLog.add("권한", "마이크 권한이 있어야 한마디를 남길 수 있어요")
             REQUEST_VOICE -> setVoiceAnswer(granted)
         }
-    }
-
-    /**
-     * Gleo 음성 명령 처리. 결과 문장은 Gleo가 대답을 만들 때 쓰므로 영어로 쓴다.
-     * 앱이 바로 소리를 내는 명령(듣기·넘기기)은 Gleo가 말하지 않게(SILENT), 녹음은 삑 소리 뒤에 시작한다.
-     */
-    override fun onGleo(command: GleoCommand): GleoReply {
-        val phase = guide.phase
-        val listening = phase != GuideController.Phase.IDLE && phase != GuideController.Phase.PROMPTING
-        val reply = when (command) {
-            GleoCommand.LISTEN -> when {
-                listening -> GleoReply(Status.SUCCESS, "Road messages are already playing.", Mode.SILENT)
-                record.phase == RecordController.Phase.RECORDING -> GleoReply(Status.FAIL, "A message is being recorded right now.", Mode.VOICE)
-                guide.listenNow() -> GleoReply(Status.SUCCESS, "Playing the road messages ahead.", Mode.SILENT)
-                else -> GleoReply(Status.FAIL, "There are no road messages ahead right now.", Mode.VOICE)
-            }
-            GleoCommand.SKIP -> if (phase == GuideController.Phase.IDLE) {
-                GleoReply(Status.FAIL, "No road message is playing.", Mode.VOICE)
-            } else {
-                guide.skip()
-                GleoReply(Status.SUCCESS, "Skipped the road message.", Mode.SILENT)
-            }
-            GleoCommand.STOP -> if (phase == GuideController.Phase.IDLE) {
-                GleoReply(Status.FAIL, "No road message is playing.", Mode.VOICE)
-            } else {
-                guide.stop()
-                GleoReply(Status.SUCCESS, "Stopped the road messages.", Mode.BEEP)
-            }
-            GleoCommand.THANK -> if (guide.canThank) {
-                guide.thanks()
-                // 다음 한마디가 이어서 나올 수 있으면 말 대신 효과음만.
-                GleoReply(Status.SUCCESS, "Sent thanks to the driver who left the message.", if (listening) Mode.BEEP else Mode.VOICE)
-            } else {
-                GleoReply(Status.FAIL, "There is no road message to thank yet.", Mode.VOICE)
-            }
-            GleoCommand.RECORD -> when {
-                record.phase == RecordController.Phase.RECORDING -> {
-                    record.toggle()
-                    GleoReply(Status.SUCCESS, "Finished recording the message.", Mode.BEEP)
-                }
-                phase != GuideController.Phase.IDLE -> GleoReply(Status.FAIL, "Please wait until the road message finishes.", Mode.VOICE)
-                !hasMic() -> GleoReply(Status.FAIL, "Microphone permission is needed in Gildongmu.", Mode.VOICE)
-                tracker.latest == null -> GleoReply(Status.FAIL, "The current location is not ready yet.", Mode.VOICE)
-                else -> {
-                    // Gleo의 삑 소리와 마이크 사용이 끝난 뒤에 녹음을 시작한다.
-                    ui.postDelayed({ if (record.phase == RecordController.Phase.IDLE) record.toggle() }, GLEO_RECORD_DELAY_MS)
-                    GleoReply(Status.SUCCESS, "Recording starts after the beep. It stops after 15 seconds.", Mode.BEEP)
-                }
-            }
-        }
-        render()
-        return reply
     }
 
     private fun onRecordPressed() {
@@ -384,6 +321,8 @@ class MainActivity : Activity(), GleoActions.Target {
     }
 
     private fun setVoiceAnswer(on: Boolean) {
+        // 마이크 권한을 새로 받았으면 화면 밖에서도 마이크를 쓸 수 있게 서비스 종류를 다시 맞춘다.
+        if (on) GuideService.start(this)
         settings.voiceAnswer = on
         EventLog.add("설정", "말로 대답하기 ${if (on) "켜짐" else "꺼짐"}")
         render()
@@ -842,7 +781,6 @@ class MainActivity : Activity(), GleoActions.Target {
         private const val REQUEST_START = 1
         private const val REQUEST_RECORD = 2
         private const val REQUEST_VOICE = 3
-        private const val GLEO_RECORD_DELAY_MS = 1_200L
         private const val PROGRESS_MAX = 1_000
         private const val GARDEN_TILES = 12
     }
