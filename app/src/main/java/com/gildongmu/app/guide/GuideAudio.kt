@@ -10,11 +10,8 @@ import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import com.gildongmu.app.EventLog
 import java.io.File
-import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.min
 import kotlin.math.sin
@@ -25,7 +22,8 @@ import kotlin.math.sin
  * - 내비 안내가 오면 직접 멈추고(setWillPauseWhenDucked), 안내가 끝나면 이어서 튼다.
  * 포커스는 알림음부터 재생이 끝날 때까지 한 번만 잡는다. 중간에 놓으면 음악이 다시 나오면서
  * 핸들 버튼이 음악 앱으로 가 버리기 때문이다.
- * "들을까요?" 문장은 차에 들어 있는 TTS로 읽는다. TTS가 없거나 한국어를 못 읽으면 알림음만 낸다.
+ * "들을까요?" 문장은 [PromptVoice]가 Pleos TTS(차 안 엔진)로 읽는다. 읽을 수 없으면 알림음만 낸다.
+ * 문장을 읽는 중에 내비 안내가 끼어들면 읽기를 멈추고, 안내가 끝나면 처음부터 다시 읽는다.
  */
 class GuideAudio(context: Context, private val onFocusLost: () -> Unit) {
 
@@ -56,13 +54,7 @@ class GuideAudio(context: Context, private val onFocusLost: () -> Unit) {
         finish(completed = true, playedMs = limitMs)
     }
 
-    private var speechDone: (() -> Unit)? = null
-    private var ttsReady = false
-    private val tts: TextToSpeech = TextToSpeech(context) { status ->
-        handler.post { onTtsReady(status) }
-    }
-    // 대답이 늦게 오거나 끝내 안 오는 TTS도 있어서, 길게 기다리지 않는다.
-    private val speechTimeout = Runnable { finishSpeech() }
+    private val voice = PromptVoice(context, attributes)
 
     @Volatile
     var state = "조용함"
@@ -99,20 +91,13 @@ class GuideAudio(context: Context, private val onFocusLost: () -> Unit) {
 
     /** 안내 문장을 읽고, 다 읽으면(또는 읽을 수 없으면) `onDone`을 부른다. 알림음이 끝난 뒤에 부른다. */
     fun speak(text: String, onDone: () -> Unit) {
-        finishSpeech(notify = false)
-        speechDone = onDone
-        if (!ttsReady) {
-            finishSpeech()
-            return
-        }
-        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
-        handler.postDelayed(speechTimeout, SPEECH_TIMEOUT_MS)
+        voice.speak(text, onDone)
     }
 
     /** TTS를 닫는다. 앱을 끝낼 때 한 번 부른다. */
     fun release() {
         end()
-        tts.shutdown()
+        voice.release()
     }
 
     /**
@@ -156,41 +141,12 @@ class GuideAudio(context: Context, private val onFocusLost: () -> Unit) {
     /** 안내가 끝나면 부른다. 포커스를 돌려줘서 음악이 다시 나오게 한다. */
     fun end() {
         stop()
-        finishSpeech(notify = false)
-        if (ttsReady) tts.stop()
+        voice.stop()
         if (hasFocus) {
             audioManager.abandonAudioFocusRequest(focusRequest)
             hasFocus = false
         }
         state = "조용함"
-    }
-
-    private fun onTtsReady(status: Int) {
-        val language = if (status == TextToSpeech.SUCCESS) tts.setLanguage(Locale.KOREAN) else TextToSpeech.LANG_NOT_SUPPORTED
-        ttsReady = language >= TextToSpeech.LANG_AVAILABLE
-        if (!ttsReady) {
-            EventLog.add("오디오", "TTS로 한국어를 읽을 수 없어 알림음만 내요 ($status/$language)")
-            return
-        }
-        // 한마디와 같은 미디어 용도로 읽는다. 어시스턴트 용도는 내비 안내와 부딪힌다 (docs/api.md 4장).
-        tts.setAudioAttributes(attributes)
-        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) = Unit
-            override fun onDone(utteranceId: String?) {
-                handler.post { finishSpeech() }
-            }
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) {
-                handler.post { finishSpeech() }
-            }
-        })
-    }
-
-    private fun finishSpeech(notify: Boolean = true) {
-        handler.removeCallbacks(speechTimeout)
-        val callback = speechDone
-        speechDone = null
-        if (notify) callback?.invoke()
     }
 
     private fun finish(completed: Boolean, playedMs: Long) {
@@ -225,18 +181,23 @@ class GuideAudio(context: Context, private val onFocusLost: () -> Unit) {
         EventLog.add("오디오", "포커스 ← ${focusChangeName(change)}")
         val current = player
         when (change) {
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ->
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                voice.interrupt()
                 if (current != null && current.isPlaying) {
                     current.pause()
                     pauseLimit()
                     pausedByFocus = true
                     state = "내비 안내로 잠시 멈춤"
                 }
-            AudioManager.AUDIOFOCUS_GAIN -> if (current != null && pausedByFocus) {
-                current.start()
-                startLimit()
-                pausedByFocus = false
-                state = "재생 중"
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                voice.resume()
+                if (current != null && pausedByFocus) {
+                    current.start()
+                    startLimit()
+                    pausedByFocus = false
+                    state = "재생 중"
+                }
             }
             AudioManager.AUDIOFOCUS_LOSS -> {
                 // 다른 앱이 소리를 완전히 가져갔다(예: 운전자가 음악을 새로 틂). 이번 안내는 끝낸다.
@@ -279,8 +240,6 @@ class GuideAudio(context: Context, private val onFocusLost: () -> Unit) {
             AudioAttributes.USAGE_VOICE_COMMUNICATION,
             AudioAttributes.USAGE_ASSISTANT,
         )
-        private const val UTTERANCE_ID = "gildongmu-prompt"
-        private const val SPEECH_TIMEOUT_MS = 6_000L
     }
 
     private fun focusChangeName(change: Int) = when (change) {
