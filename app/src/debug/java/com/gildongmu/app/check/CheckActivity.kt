@@ -29,6 +29,7 @@ class CheckActivity : Activity() {
     private lateinit var carCheck: CarCheck
     private lateinit var mediaKeyCheck: MediaKeyCheck
     private lateinit var audioCheck: AudioCheck
+    private lateinit var speechCheck: SpeechCheck
 
     private lateinit var pleosText: TextView
     private lateinit var locationText: TextView
@@ -36,6 +37,7 @@ class CheckActivity : Activity() {
     private lateinit var backgroundText: TextView
     private lateinit var audioText: TextView
     private lateinit var keyText: TextView
+    private lateinit var speechText: TextView
     private lateinit var logText: TextView
 
     private val refresh = object : Runnable {
@@ -52,6 +54,7 @@ class CheckActivity : Activity() {
         carCheck = CarCheck(this)
         mediaKeyCheck = MediaKeyCheck(this)
         audioCheck = AudioCheck(this) { playing -> mediaKeyCheck.setPlaying(playing) }
+        speechCheck = SpeechCheck(this)
 
         setContentView(buildLayout())
         EventLog.add("앱", "확인 화면 시작")
@@ -73,6 +76,7 @@ class CheckActivity : Activity() {
 
     override fun onDestroy() {
         audioCheck.stopAll()
+        speechCheck.release()
         locationCheck.stop()
         carCheck.disconnect()
         mediaKeyCheck.release()
@@ -127,6 +131,7 @@ class CheckActivity : Activity() {
         backgroundText.text = BackgroundCheckService.summary()
         audioText.text = audioCheck.summary()
         keyText.text = mediaKeyCheck.summary
+        speechText.text = speechCheck.summary()
         logText.text = EventLog.recent()
     }
 
@@ -170,6 +175,11 @@ class CheckActivity : Activity() {
         keyText = section(
             column, "⑥ 핸들·미디어 버튼",
             "가짜 음악 재생 중에 핸들의 다음 곡·재생 버튼을 누르면 여기에 표시됩니다.",
+        )
+        speechText = section(
+            column, "⑦ 말로 대답하기 (Pleos 음성 인식)",
+            "마이크 대신 files/stt/*.pcm(16kHz·16비트·모노)을 엔진에 넣어, 들은 말과 맞춘 대답을 봅니다.",
+            "파일로 알아듣기" to { speechCheck.runFiles() },
         )
         column.addView(text("최근 기록", 22f, bold = true))
         logText = text("", 15f)
