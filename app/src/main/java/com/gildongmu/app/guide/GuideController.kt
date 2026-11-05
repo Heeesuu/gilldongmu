@@ -86,6 +86,8 @@ class GuideController(
     private var deadlineMs = 0L
     /** 이번 주행에서 이미 물어본 한마디. 대답이 없었거나 넘긴 것도 다시 묻지 않는다. */
     private val asked = mutableSetOf<String>()
+    /** 내비 안내·통화 때문에 묻기를 미룬 중인가. 기록을 한 번만 남기려고 쓴다. */
+    private var deferred = false
     private val met = mutableSetOf<String>()
     private var heardCount = 0
     private var thankedCount = 0
@@ -110,7 +112,16 @@ class GuideController(
         if (api.configured && !polling && policy.shouldPoll(lastPoll, state, clock(), nextPollSec)) poll(state)
         refreshApproaches()
         if (phase == Phase.IDLE && canPrompt()) {
-            policy.pickPrompt(approaches, clock(), lastPromptAtMs).takeIf { it.isNotEmpty() }?.let { prompt(it) }
+            val group = policy.pickPrompt(approaches, clock(), lastPromptAtMs)
+            if (group.isEmpty()) return
+            // 내비 안내나 통화 중이면 끝날 때까지 미룬다. 다음 위치(1초 뒤)에 다시 본다.
+            if (audio.othersSpeaking()) {
+                if (!deferred) EventLog.add("안내", "내비 안내나 통화가 끝나면 물어볼게요")
+                deferred = true
+                return
+            }
+            deferred = false
+            prompt(group)
         }
     }
 
