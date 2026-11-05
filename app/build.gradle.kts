@@ -44,6 +44,7 @@ android {
 dependencies {
     implementation(libs.pleos.vehicle)
     implementation(libs.pleos.navihelper)
+    implementation(libs.pleos.texttospeech)
 
     testImplementation(libs.junit)
 }
