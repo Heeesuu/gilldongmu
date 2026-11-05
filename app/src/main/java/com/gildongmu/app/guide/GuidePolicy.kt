@@ -47,7 +47,7 @@ class GuidePolicy(
 
     /**
      * 가장 먼저 닿는(가장 가까운) 한마디에 10초 안에 닿고, 마지막 안내에서 5분이 지났으면 묻는다.
-     * 그 한마디에서 50m 안에 모인 한마디도 함께 묶어 한 번에 묻는다 ("앞쪽에 한마디가 6건 있어요. 들을까요?").
+     * 그 한마디에서 50m 안에 모인 한마디도 함께 묶어 한 번에 묻는다 ("앞에 길동무 6명이 있어요. 들어 볼까요?").
      * 닿는 순서(가까운 순)로 돌려주고, 물을 게 없으면 빈 목록이다.
      */
     fun pickPrompt(approaches: List<Approach>, nowMs: Long, lastPromptAtMs: Long?): List<Approach> {

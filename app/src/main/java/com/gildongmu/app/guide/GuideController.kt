@@ -307,14 +307,14 @@ class GuideController(
         }
     }
 
-    /** "길동무가 인사 한마디를 남겼어요. 들어 볼까요?" 또는 "이 자리에 길동무 6명이 한마디씩 남겼어요. 들어 볼까요?" */
-    private fun promptSentence(): String {
-        val message = current
-        return when {
-            queue.size > 1 -> "이 자리에 길동무 ${queue.size}명이 한마디씩 남겼어요. 들어 볼까요?"
-            message?.stage == Stage.FLOWER -> "꽃을 든 길동무가 ${kindWord(message)}를 남겼어요. 들어 볼까요?"
-            else -> "길동무가 ${kindWord(message)}를 남겼어요. 들어 볼까요?"
-        }
+    /**
+     * "앞에 길동무가 있어요. 들어 볼까요?" 또는 "앞에 길동무 6명이 있어요. 들어 볼까요?"
+     * 운전 중에 한 번에 알아듣도록 짧게 묻는다. 한마디 종류(인사·길·장소)는 들을 때 화면에 보인다.
+     */
+    private fun promptSentence(): String = when {
+        queue.size > 1 -> "앞에 길동무 ${queue.size}명이 있어요. 들어 볼까요?"
+        current?.stage == Stage.FLOWER -> "앞에 꽃을 든 길동무가 있어요. 들어 볼까요?"
+        else -> "앞에 길동무가 있어요. 들어 볼까요?"
     }
 
     /** "인사 한마디", 종류를 모르면 그냥 "한마디". */
