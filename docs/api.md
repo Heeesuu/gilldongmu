@@ -16,7 +16,7 @@
 | 환경 | 기본 주소 |
 |---|---|
 | 에뮬레이터에서 내 Mac의 서버로 | `http://10.0.2.2:8080/v1` |
-| 배포 서버 | `https://<정해지면 기입>/v1` |
+| 배포 서버 | `https://<Cloud Run 주소>/v1` (올리는 법과 release APK에 넣는 법은 [deploy.md](deploy.md)) |
 
 ### 요청 헤더
 
@@ -399,7 +399,7 @@
 
 업로드가 끝나면 서버가 따로 처리합니다.
 
-1. 음성 → 글자 (STT 서비스는 정해지면 기입)
+1. 음성 → 글자: Google Cloud Speech-to-Text v1(`OGG_OPUS`, `ko-KR`, 동기 인식). 서버의 `STT_PROVIDER=google`일 때 쓰고, 없으면 모두 보류됩니다
 2. 비속어 사전 검사
 3. Claude API(가벼운 모델)에 글자를 보내 아래 JSON을 받습니다.
 

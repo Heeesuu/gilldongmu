@@ -9,7 +9,8 @@ type Config struct {
 	SQLitePath      string
 	AnthropicAPIKey string
 	JudgeModel      string
-	DevAutoApprove  bool // 로컬 개발용: STT·LLM 없이 모두 공개
+	STTProvider     string // "google"이면 Google Speech-to-Text, 비어 있으면 STT 없음(한마디가 보류된다)
+	DevAutoApprove  bool   // 로컬 개발용: STT·LLM 없이 모두 공개
 }
 
 func Load() Config {
@@ -20,6 +21,7 @@ func Load() Config {
 		AnthropicAPIKey: os.Getenv("ANTHROPIC_API_KEY"),
 		// 한 줄 분류라 가벼운 모델로 비용을 낮춘다(기획서 6번 '1건당 1원 미만').
 		JudgeModel:     getenv("JUDGE_MODEL", "claude-haiku-5-5"),
+		STTProvider:    os.Getenv("STT_PROVIDER"),
 		DevAutoApprove: os.Getenv("DEV_AUTO_APPROVE") == "true",
 	}
 }
