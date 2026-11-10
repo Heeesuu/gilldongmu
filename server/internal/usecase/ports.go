@@ -52,7 +52,7 @@ type ReviewOutcome struct {
 	ExpiresAt  *time.Time
 }
 
-// SpeechToText는 음성을 글자로 바꾼다. 어떤 서비스를 쓸지는 아직 정하지 않았다.
+// SpeechToText는 음성을 글자로 바꾼다. 배포에서는 Google Speech-to-Text(moderation.GoogleSTT)를 쓴다.
 type SpeechToText interface {
 	Transcribe(ctx context.Context, audio []byte, mime string) (string, error)
 }

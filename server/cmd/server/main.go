@@ -39,7 +39,23 @@ func main() {
 	if cfg.AnthropicAPIKey != "" {
 		judge = moderation.NewClaudeJudge(cfg.AnthropicAPIKey, cfg.JudgeModel)
 	}
-	moderationUC := usecase.NewModerationUsecase(repo, moderation.UnconfiguredSTT{}, judge, moderation.NewDictionary(), cfg.DevAutoApprove)
+	var stt usecase.SpeechToText = moderation.UnconfiguredSTT{}
+	switch cfg.STTProvider {
+	case "":
+	case "google":
+		googleSTT, err := moderation.NewGoogleSTT(context.Background(), "ko-KR")
+		if err != nil {
+			// 설정했는데 붙지 않으면 바로 멈춘다. 조용히 모든 한마디가 보류되는 것보다 배포 단계에서 아는 게 낫다.
+			slog.Error("STT 연결 실패", "provider", cfg.STTProvider, "err", err)
+			os.Exit(1)
+		}
+		defer googleSTT.Close()
+		stt = googleSTT
+	default:
+		slog.Error("알 수 없는 STT_PROVIDER", "provider", cfg.STTProvider)
+		os.Exit(1)
+	}
+	moderationUC := usecase.NewModerationUsecase(repo, stt, judge, moderation.NewDictionary(), cfg.DevAutoApprove)
 	worker := usecase.NewModerationWorker(moderationUC, repo)
 
 	now := func() time.Time { return time.Now().UTC() }
@@ -64,7 +80,7 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	slog.Info("서버 시작", "addr", cfg.Addr, "db", dbName, "llm", cfg.AnthropicAPIKey != "", "dev_auto_approve", cfg.DevAutoApprove)
+	slog.Info("서버 시작", "addr", cfg.Addr, "db", dbName, "stt", cfg.STTProvider, "llm", cfg.AnthropicAPIKey != "", "dev_auto_approve", cfg.DevAutoApprove)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("서버 종료", "err", err)
 		os.Exit(1)
