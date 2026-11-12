@@ -19,3 +19,8 @@
 /server/bin/
 .env
 .env.*
+
+# 시연 도구: 만든 음성과 심은 기록(기기 ID)은 올리지 않는다
+/tools/demo/out/
+/tools/demo/*.local.json
+/tools/demo/*.local.done.json
