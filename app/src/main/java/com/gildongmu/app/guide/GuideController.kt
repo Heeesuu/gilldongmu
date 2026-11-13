@@ -15,10 +15,12 @@ import com.gildongmu.app.data.ThanksResult
 import com.gildongmu.app.drive.DriveState
 import com.gildongmu.app.drive.Geo
 import com.gildongmu.app.guide.AnswerWords.Answer
+import com.gildongmu.app.record.OpusPcm
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
 /**
@@ -100,6 +102,26 @@ class GuideController(
 
     /** 이번 안내에서 말로 대답할 수 있는가. 화면 문구에 쓴다. */
     val voiceReady: Boolean get() = voice.usable && voiceOn()
+
+    private val decoder = Executors.newSingleThreadExecutor()
+
+    /**
+     * 남긴 한마디(녹음 파일)를 차 안 음성 인식으로 글자로 바꾼다(검수용, [VoiceAnswer.transcribe]).
+     * 대답을 듣는 엔진과 같은 엔진을 쓰므로 여기서 맡는다. 파일을 푸는 일은 따로 스레드에서 한다. `done`은 메인 스레드에서 부른다.
+     */
+    fun transcribe(file: File, done: (String) -> Unit) {
+        val started = runCatching {
+            decoder.execute {
+                val pcm = runCatching { OpusPcm.decode(file) }.getOrElse {
+                    EventLog.add("목소리", "녹음 파일을 풀지 못했어요 (${it.message ?: it.javaClass.simpleName})")
+                    ByteArray(0)
+                }
+                handler.post { voice.transcribe(pcm, done) }
+            }
+        }
+        // 앱이 닫히는 중이라 바꿀 수 없으면 글자 없이 올린다(서버는 보류한다).
+        if (started.isFailure) done("")
+    }
 
     /** 고마워요를 남길 한마디가 있는가: 듣고 있거나 방금 들었다. */
     val canThank: Boolean get() = phase == Phase.PLAYING || phase == Phase.AFTER || (phase == Phase.IDLE && lastHeard != null)
@@ -258,6 +280,7 @@ class GuideController(
         handler.removeCallbacks(promptTimeout)
         handler.removeCallbacks(afterTimeout)
         voice.release()
+        decoder.shutdown()
         audio.release()
         keys.release()
         api.shutdown()

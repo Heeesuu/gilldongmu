@@ -51,6 +51,7 @@ class ServerApi(
         meta.heading?.let { metaJson.put("heading", it) }
         meta.wiperOn?.let { metaJson.put("wiper_on", it) }
         meta.headlightOn?.let { metaJson.put("headlight_on", it) }
+        meta.transcript.takeIf { it.isNotBlank() }?.let { metaJson.put("transcript", it) }
 
         val boundary = "gildongmu-${UUID.randomUUID()}"
         val body = Multipart.body(

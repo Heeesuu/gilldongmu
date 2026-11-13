@@ -35,11 +35,12 @@ type Env struct {
 	Profiles   *usecase.ProfileUsecase
 	Queue      *FakeQueue
 	Clock      *FakeClock
-	STT        *FakeSTT
 	Judge      *FakeJudge
+	// Transcript는 올릴 때 함께 보내는 글자다(앱이 차 안 음성 인식으로 바꾼 것을 흉내 낸다).
+	Transcript string
 }
 
-// NewEnv는 테스트마다 따로 쓰는 메모리 SQLite와 가짜 STT·판정기로 usecase를 만든다.
+// NewEnv는 테스트마다 따로 쓰는 메모리 SQLite와 가짜 판정기로 usecase를 만든다.
 func NewEnv(t *testing.T) *Env {
 	t.Helper()
 	name := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
@@ -59,12 +60,12 @@ func NewEnv(t *testing.T) *Env {
 
 	repo := repository.NewMessageRepository(db)
 	env := &Env{
-		DB:    db,
-		Repo:  repo,
-		Queue: &FakeQueue{},
-		Clock: &FakeClock{now: time.Date(2026, 11, 7, 23, 50, 0, 0, time.UTC)},
-		STT:   &FakeSTT{Text: "다들 오늘도 힘내세요"},
-		Judge: &FakeJudge{Result: usecase.Judgement{Grade: domain.ReviewClean, Kind: domain.KindGreeting, Reason: "응원"}},
+		DB:         db,
+		Repo:       repo,
+		Queue:      &FakeQueue{},
+		Clock:      &FakeClock{now: time.Date(2026, 11, 7, 23, 50, 0, 0, time.UTC)},
+		Judge:      &FakeJudge{Result: usecase.Judgement{Grade: domain.ReviewClean, Kind: domain.KindGreeting, Reason: "응원"}},
+		Transcript: "다들 오늘도 힘내세요",
 	}
 	ids := 0
 	newID := func() string {
@@ -72,7 +73,7 @@ func NewEnv(t *testing.T) *Env {
 		return fmt.Sprintf("00000000-0000-4000-8000-%012d", ids)
 	}
 	env.Messages = usecase.NewMessageUsecase(repo, repository.NewUnitOfWork(db), env.Queue, env.Clock.Now, newID)
-	env.Moderation = usecase.NewModerationUsecase(repo, env.STT, env.Judge, moderation.NewDictionaryFrom("씨발\n"), false)
+	env.Moderation = usecase.NewModerationUsecase(repo, env.Judge, moderation.NewDictionaryFrom("씨발\n"), false)
 	env.Profiles = usecase.NewProfileUsecase(repository.NewProfileRepository(db), moderation.NewDictionaryFrom("씨발\n"), env.Clock.Now)
 	return env
 }
@@ -101,6 +102,7 @@ func (e *Env) upload(t *testing.T, deviceID string, lat, lon float64, heading *f
 		Heading:    heading,
 		SpeedKmh:   30,
 		DurationMs: 6400,
+		Transcript: e.Transcript,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -137,13 +139,6 @@ type FakeClock struct{ now time.Time }
 
 func (c *FakeClock) Now() time.Time          { return c.now }
 func (c *FakeClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
-
-type FakeSTT struct {
-	Text string
-	Err  error
-}
-
-func (s *FakeSTT) Transcribe(context.Context, []byte, string) (string, error) { return s.Text, s.Err }
 
 type FakeJudge struct {
 	Result usecase.Judgement

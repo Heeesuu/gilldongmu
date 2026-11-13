@@ -4,7 +4,9 @@ import (
 	"context"
 	"math"
 	"sort"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gildongmu/server/internal/domain"
 )
@@ -46,10 +48,14 @@ type UploadInput struct {
 	DurationMs  int
 	WiperOn     *bool
 	HeadlightOn *bool
+	// Transcript는 앱이 차 안 음성 인식으로 바꾼 글자다. 비어 있으면 검수에서 보류한다.
+	Transcript string
 }
 
 func (in UploadInput) validate() error {
 	switch {
+	case utf8.RuneCountInString(in.Transcript) > domain.MaxTranscriptRunes:
+		return domain.Invalid("transcript가 너무 깁니다.")
 	case in.AudioMime != domain.AudioMimeOgg:
 		return domain.ErrUnsupported
 	case len(in.Audio) == 0:
@@ -115,6 +121,7 @@ func (u *MessageUsecase) Upload(ctx context.Context, in UploadInput) (*domain.Me
 		Audio:       in.Audio,
 		AudioMime:   in.AudioMime,
 		DurationMs:  in.DurationMs,
+		Transcript:  strings.TrimSpace(in.Transcript),
 		Review:      domain.ReviewPending,
 		RecordedAt:  in.RecordedAt,
 		CreatedAt:   now,

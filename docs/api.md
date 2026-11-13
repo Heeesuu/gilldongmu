@@ -116,7 +116,7 @@
 
 | 파트 | 형식 | 설명 |
 |---|---|---|
-| `audio` | 파일, `audio/ogg` | Opus, 16kHz 모노, 약 24kbps. 최대 15초, 최대 1MB. 앱은 `MediaRecorder`의 `OutputFormat.OGG` + `AudioEncoder.OPUS`(Android 10 이상, Pleos는 14)로 녹음합니다. Google STT·Whisper 둘 다 이 형식을 받습니다 |
+| `audio` | 파일, `audio/ogg` | Opus, 16kHz 모노, 약 24kbps. 최대 15초, 최대 1MB. 앱은 `MediaRecorder`의 `OutputFormat.OGG` + `AudioEncoder.OPUS`(Android 10 이상, Pleos는 14)로 녹음합니다 |
 | `meta` | JSON 문자열 | 아래 표 |
 
 `meta` 필드:
@@ -130,6 +130,7 @@
 | `duration_ms` | 정수 | ✓ | 녹음 길이. 15,000 이하 |
 | `wiper_on` | 불리언 | | 와이퍼 켜짐 여부 (모르면 생략) |
 | `headlight_on` | 불리언 | | 전조등 켜짐 여부 (모르면 생략) |
+| `transcript` | 문자열 | | 앱이 **차 안 음성 인식(Pleos SpeechToText SDK)**으로 바꾼 글자. 최대 500자. 서버는 이 글자로 검수하고, 음성을 외부 음성 인식 서비스로 보내지 않습니다(공모전 개발 범위 안내). 비었거나 빠지면 검수에서 보류됩니다 |
 
 ```json
 {
@@ -399,7 +400,7 @@
 
 업로드가 끝나면 서버가 따로 처리합니다.
 
-1. 음성 → 글자: Google Cloud Speech-to-Text v1(`OGG_OPUS`, `ko-KR`, 동기 인식). 서버의 `STT_PROVIDER=google`일 때 쓰고, 없으면 모두 보류됩니다
+1. 글자: 앱이 올린 `meta.transcript`를 씁니다. 앱은 녹음이 끝나면 녹음 파일을 16kHz PCM으로 풀어 Pleos SpeechToText SDK(ON_DEVICE, `sendAudio`)에 넣고, 말이 끊겨 인식이 끝나면 다시 시작해 글자를 이어 붙입니다. 글자가 없으면 보류합니다
 2. 비속어 사전 검사
 3. Claude API(가벼운 모델)에 글자를 보내 아래 JSON을 받습니다.
 

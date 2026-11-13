@@ -20,7 +20,7 @@
 | 듣기 | 같은 방향 앞쪽에 다른 운전자가 남긴 한마디가 있으면, 닿기 약 10초 전에 차 안 음성(Pleos TTS)으로 한 번 묻습니다. 대답하면 그 자리(50m 안)에 모인 한마디를 차례로 들려주고, 하나가 끝날 때마다 4초 동안 "고마워"를 기다립니다 |
 | 대답 | 말(Pleos STT): "응"(듣기), "넘겨"(지나가기), "고마워"(고마워요), "그만"(멈춤). 핸들 재생 버튼과 화면 버튼도 됩니다 |
 | 남기기 | "나도 한마디 남기기" 버튼으로 최대 15초 녹음합니다. 녹음을 시작한 위치·진행 방향·와이퍼·전조등 상태를 함께 저장합니다 |
-| 검수 | 서버가 음성을 글자로 바꾸고(Google Speech-to-Text), 비속어 사전과 Claude 판정을 거쳐 공개합니다. 검수 중에는 씨앗, 공개되면 새싹입니다 |
+| 검수 | 녹음이 끝나면 차 안 음성 인식(Pleos STT)으로 글자로 바꿔 음성과 함께 올리고, 서버가 비속어 사전과 Claude 판정을 거쳐 공개합니다. 검수 중에는 씨앗, 공개되면 새싹입니다 |
 | 고마워요 | 들은 한마디에 고마워요를 보냅니다. 5개를 받으면 꽃이 핍니다 |
 | 운전 안전 | 듣는 동안 음악은 잠시 멈추고, 내비 안내 음성이 나오면 한마디도 멈췄다가 이어서 재생합니다. 주행 중에는 큰 버튼만 보여 줍니다 |
 | 화면 밖 동작 | 앱 창을 닫거나 내비를 앞에 띄워도 계속 동작합니다 |
@@ -38,7 +38,7 @@
 | 앱 | Kotlin, minSdk 28, targetSdk 34, compileSdk 37 (AGP 9.5, Gradle 9.6) |
 | Pleos SDK | Vehicle 2.3.2, NaviHelper 3.0.5, TextToSpeech 3.3.1, SpeechToText 3.3.1 (Playground 저장소, 로그인 불필요) |
 | 서버 | Go 1.27, Google Cloud Run(서울) + PostgreSQL |
-| 검수 | Google Speech-to-Text(ko-KR) → 비속어 사전 → Claude API |
+| 검수 | 차 안 Pleos SpeechToText(글자로 바꾸기) → 서버: 비속어 사전 → Claude API. 차 마이크 음성은 외부 음성 인식 서비스로 보내지 않습니다 |
 
 ```bash
 ~/Library/Android/sdk/emulator/emulator -avd Pleos_Connect_v2.1.0 -no-snapshot-load -feature -Vulkan
@@ -129,7 +129,7 @@ release APK는 서버 주소(`-Pgildongmu.serverUrl=https://…/v1`)와 저장�
 
 ```
 app/      차량 앱(Kotlin): 위치·차량 신호, 안내·재생, 녹음·업로드, 화면
-server/   서버(Go): API, 검수(Google STT·비속어 사전·Claude), DB(GORM)
+server/   서버(Go): API, 검수(비속어 사전·Claude), DB(GORM)
 docs/     api.md(앱과 서버의 약속), deploy.md(배포·release 빌드)
 apk/      제출용 release APK
 tools/demo/  시험 경로 달리기(drive.sh), 시연용 한마디 심기·지우기(seed.py·unseed.py, Mac 전용)
