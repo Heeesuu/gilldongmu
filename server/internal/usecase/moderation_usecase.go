@@ -9,19 +9,20 @@ import (
 	"gildongmu/server/internal/domain"
 )
 
-// ModerationUsecase는 검수 파이프라인이다: 음성 → 글자 → 비속어 사전 → LLM 판정 → 저장.
+// ModerationUsecase는 검수 파이프라인이다: 글자 → 비속어 사전 → LLM 판정 → 저장.
+// 글자는 앱이 차 안 음성 인식(Pleos SpeechToText SDK)으로 바꿔 음성과 함께 올린 것이다.
+// 서버는 음성을 외부 음성 인식 서비스로 보내지 않는다(공모전 개발 범위 안내: 음성 인식은 SpeechToText SDK).
 // 어느 단계든 실패하면 공개하지 않도록 보류(hold)로 둔다.
 type ModerationUsecase struct {
 	repo           MessageRepository
-	stt            SpeechToText
 	judge          Judge
 	dictionary     ProfanityDictionary
 	devAutoApprove bool
 }
 
-// devAutoApprove는 로컬 개발용이다. STT·LLM 없이 모든 한마디를 인사(greeting)로 공개한다.
-func NewModerationUsecase(repo MessageRepository, stt SpeechToText, judge Judge, dictionary ProfanityDictionary, devAutoApprove bool) *ModerationUsecase {
-	return &ModerationUsecase{repo: repo, stt: stt, judge: judge, dictionary: dictionary, devAutoApprove: devAutoApprove}
+// devAutoApprove는 로컬 개발용이다. 판정 없이 모든 한마디를 인사(greeting)로 공개한다.
+func NewModerationUsecase(repo MessageRepository, judge Judge, dictionary ProfanityDictionary, devAutoApprove bool) *ModerationUsecase {
+	return &ModerationUsecase{repo: repo, judge: judge, dictionary: dictionary, devAutoApprove: devAutoApprove}
 }
 
 // Moderate는 검수 중인 한마디 하나를 판정해 저장한다.
@@ -47,13 +48,9 @@ func (u *ModerationUsecase) decide(ctx context.Context, m *domain.Message) Revie
 		return ReviewOutcome{Review: domain.ReviewClean, Kind: domain.KindGreeting, Reason: "개발용 자동 공개"}
 	}
 
-	transcript, err := u.stt.Transcribe(ctx, m.Audio, m.AudioMime)
-	if err != nil {
-		slog.Warn("음성 변환 실패", "id", m.ID, "err", err)
-		return hold("", "음성을 글자로 바꾸지 못했습니다.")
-	}
-	if strings.TrimSpace(transcript) == "" {
-		return hold(transcript, "말소리가 없습니다.")
+	transcript := strings.TrimSpace(m.Transcript)
+	if transcript == "" {
+		return hold("", "글자가 없습니다(말소리가 없거나 차 안 음성 인식을 쓰지 못함).")
 	}
 
 	j, err := u.judge.Judge(ctx, transcript)

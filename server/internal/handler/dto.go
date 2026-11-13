@@ -18,6 +18,8 @@ type uploadMeta struct {
 	DurationMs  *int       `json:"duration_ms"`
 	WiperOn     *bool      `json:"wiper_on"`
 	HeadlightOn *bool      `json:"headlight_on"`
+	// Transcript는 앱이 차 안 음성 인식(Pleos SpeechToText)으로 바꾼 글자다. 서버는 이 글자로 검수한다.
+	Transcript string `json:"transcript"`
 }
 
 func (m uploadMeta) missing() string {

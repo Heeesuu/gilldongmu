@@ -90,6 +90,8 @@ data class UploadMeta(
     val durationMs: Long,
     val wiperOn: Boolean?,
     val headlightOn: Boolean?,
+    /** 차 안 음성 인식(Pleos SpeechToText)으로 바꾼 글자. 서버는 이 글자로 검수한다. 없으면 빈 글자. */
+    val transcript: String = "",
 )
 
 data class UploadResult(val id: String, val stage: Stage)
