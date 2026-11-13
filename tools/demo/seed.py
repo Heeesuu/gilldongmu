@@ -12,6 +12,8 @@
 합성 목소리 중 일부(Sandy)는 음성 인식이 잘 못 알아들어 보류됐다. 보류되면 목소리나 문장을 바꿔 다시 실행한다.
 
 사용: GILDONGMU_SERVER=https://…/v1 python3 -I tools/demo/seed.py
+시연 영상용 로컬 서버(http://127.0.0.1:8080/v1)에도 쓸 수 있다. 이때는 GILDONGMU_SEED_STATE로 기록 파일을 따로 정해
+배포 서버의 기록(seeded.local.json)을 덮지 않게 한다(tools/demo/scenes.sh가 그렇게 부른다).
 """
 import json
 import os
@@ -25,7 +27,8 @@ import uuid
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-STATE = os.path.join(HERE, "seeded.local.json")
+STATE = os.environ.get("GILDONGMU_SEED_STATE") or os.path.join(HERE, "seeded.local.json")
+LOCAL_PREFIXES = ("http://127.0.0.1", "http://localhost")
 OUT = os.path.join(HERE, "out")
 LON = 126.9772
 
@@ -85,8 +88,10 @@ def wait_review(base, device, message_id, limit_sec=90):
 
 def main():
     base = os.environ.get("GILDONGMU_SERVER", "").rstrip("/")
-    if not base.startswith("https://") or not base.endswith("/v1"):
-        sys.exit("GILDONGMU_SERVER=https://…/v1 를 넣어 주세요")
+    if not (base.startswith("https://") or base.startswith(LOCAL_PREFIXES)) or not base.endswith("/v1"):
+        sys.exit("GILDONGMU_SERVER=https://…/v1 를 넣어 주세요(로컬 서버는 http://127.0.0.1:8080/v1)")
+    if base.startswith(LOCAL_PREFIXES) and "GILDONGMU_SEED_STATE" not in os.environ:
+        sys.exit("로컬 서버에 심을 때는 GILDONGMU_SEED_STATE로 기록 파일을 따로 정해 주세요")
     os.makedirs(OUT, exist_ok=True)
 
     seeded = {"server": base, "created_at": datetime.now(timezone.utc).isoformat(), "messages": []}
