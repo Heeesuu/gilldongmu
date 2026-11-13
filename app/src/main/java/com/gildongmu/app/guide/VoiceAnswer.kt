@@ -15,10 +15,13 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import com.gildongmu.app.EventLog
 import java.util.Locale
+import java.util.concurrent.Executors
+import kotlin.math.min
 import ai.pleos.playground.stt.SpeechToText as PleosStt
 
 /**
- * 말로 한 대답을 듣는다.
+ * 말로 한 대답을 듣고, 남긴 한마디를 검수용 글자로 바꾼다([transcribe]). 둘 다 같은 Pleos 엔진을 쓴다.
+ * 말로 한 대답을 듣는 방식:
  * - 먼저 Pleos SpeechToText SDK(차 안 엔진, ON_DEVICE)로 듣는다. 앱 등록(자격 증명)이 필요 없는 모드다.
  * - SDK를 쓸 수 없는 기기(일반 안드로이드)에서는 기본 음성 인식 서비스(SpeechRecognizer)로 듣는다.
  * 마이크는 "들을까요?" 뒤 8초, 한마디를 듣고 난 뒤 몇 초처럼 대답을 기다리는 동안만 연다.
@@ -71,6 +74,8 @@ class VoiceAnswer(context: Context) {
      */
     fun listen(forMs: Long, onAnswer: (AnswerWords.Answer, String) -> Boolean) {
         if (!usable) return
+        // 한마디를 글자로 바꾸는 동안은 엔진을 쓰고 있어 대답을 듣지 않는다(버튼으로는 대답할 수 있다).
+        if (transcription != null) return
         stop()
         this.onAnswer = onAnswer
         lastText = ""
@@ -100,6 +105,10 @@ class VoiceAnswer(context: Context) {
 
     fun release() {
         stop()
+        // 바꾸던 글자는 지금까지 들은 만큼 넘기고, 기다리던 것은 빈 글자로 넘긴다(앱이 닫혀도 올리기는 이어지게).
+        transcription?.finish("앱 종료")
+        while (queued.isNotEmpty()) queued.removeFirst().second("")
+        sender.shutdown()
         pleos?.let {
             runCatching {
                 it.removeListener(pleosListener)
@@ -234,6 +243,10 @@ class VoiceAnswer(context: Context) {
         override fun onUpdatedEpdData(on: Long, off: Long) = Unit
         override fun onUpdated(stt: String, completed: Boolean) {
             handler.post {
+                transcription?.let {
+                    if (completed) it.onFinal(stt) else it.onPartial(stt)
+                    return@post
+                }
                 if (onAnswer == null) return@post
                 callbacks++
                 handle(listOf(stt))
@@ -241,6 +254,10 @@ class VoiceAnswer(context: Context) {
         }
         override fun onEndedRecognition() {
             handler.post {
+                transcription?.let {
+                    it.onEnded()
+                    return@post
+                }
                 if (!pleosRunning) return@post
                 pleosRunning = false
                 callbacks++
@@ -253,6 +270,10 @@ class VoiceAnswer(context: Context) {
     }
 
     private fun onPleosError(errorType: ErrorType) {
+        transcription?.let {
+            it.onError(errorType.name)
+            return
+        }
         if (onAnswer == null) return
         pleosRunning = false
         callbacks++
@@ -334,9 +355,147 @@ class VoiceAnswer(context: Context) {
         }
     }
 
+    // ---- 남긴 한마디를 글자로 바꾸기 (검수용) ----
+
+    private var transcription: Transcription? = null
+    private val queued = ArrayDeque<Pair<ByteArray, (String) -> Unit>>()
+    private val sender = Executors.newSingleThreadExecutor()
+
+    /**
+     * 녹음한 한마디(16kHz·16비트·모노 PCM, [com.gildongmu.app.record.OpusPcm])를 차 안 엔진(ON_DEVICE)으로 글자로 바꾼다.
+     * 서버는 이 글자로 검수한다. 차 마이크 음성을 외부 음성 인식 서비스로 보내지 않기 위해서다(공모전 개발 범위 안내).
+     * - 소리는 마이크 대신 SDK의 sendAudio로 실제 속도대로 넣는다(개발용 확인 화면 ⑦과 같은 방식).
+     * - 엔진은 말이 잠깐 끊기면 그 자리에서 인식을 마친다. 넣을 소리가 남았으면 바로 다시 시작해 글자를 이어 붙인다.
+     * - 대답을 듣는 중이면 먼저 멈춘다. 이미 바꾸는 중이면 끝난 뒤 차례로 바꾼다.
+     * - Pleos 엔진이 없거나 소리가 비었으면 빈 글자를 넘긴다(서버는 글자가 없으면 공개하지 않고 보류한다).
+     * `done`은 메인 스레드에서 한 번 부른다.
+     */
+    fun transcribe(pcm: ByteArray, done: (String) -> Unit) {
+        val engine = pleos
+        if (!pleosReady || engine == null || pcm.isEmpty()) {
+            EventLog.add("목소리", "한마디를 글자로 바꾸지 못했어요 (${if (pcm.isEmpty()) "소리 없음" else "Pleos 음성 인식 없음"})")
+            done("")
+            return
+        }
+        if (transcription != null) {
+            queued.addLast(pcm to done)
+            return
+        }
+        stop()
+        val t = Transcription(engine, pcm, done)
+        transcription = t
+        handler.postDelayed(t.giveUp, pcm.size / BYTES_PER_MS + TRANSCRIBE_EXTRA_MS)
+        t.request()
+        sender.execute { t.send() }
+    }
+
+    private inner class Transcription(val engine: PleosStt, val pcm: ByteArray, val done: (String) -> Unit) {
+        private val texts = mutableListOf<String>()
+        private var partial = ""
+        private var requests = 0
+        private var finished = false
+
+        // 보내는 스레드와 함께 보는 값
+        @Volatile var listening = false
+        @Volatile var sentAll = false
+        @Volatile var stopped = false
+
+        val giveUp = Runnable { finish("시간 초과") }
+        // 엔진은 "끝"을 최종 결과보다 먼저 알린다. 최종 결과가 끝내 안 오면 마지막 부분 결과를 쓴다.
+        private val afterEnded = Runnable { onFinal(partial) }
+        private val afterSent = Runnable { onFinal(partial) }
+
+        fun request() {
+            requests++
+            listening = runCatching { engine.request() }.isSuccess
+            if (!listening) finish("요청 실패")
+        }
+
+        /** 보내는 스레드: 엔진이 듣고 있을 때만 0.1초 분량씩 실제 속도로 넣는다. */
+        fun send() {
+            var offset = 0
+            var idleMs = 0L
+            while (offset < pcm.size && !stopped) {
+                if (!listening) {
+                    Thread.sleep(IDLE_POLL_MS)
+                    idleMs += IDLE_POLL_MS
+                    if (idleMs > MAX_IDLE_MS) break
+                    continue
+                }
+                idleMs = 0
+                val end = min(offset + CHUNK_BYTES, pcm.size)
+                runCatching { engine.sendAudio(pcm.copyOfRange(offset, end)) }
+                offset = end
+                Thread.sleep(CHUNK_MS)
+            }
+            sentAll = true
+            if (stopped) return
+            runCatching { engine.completeAudioSend() }
+            handler.post {
+                if (!listening) finish(null) else handler.postDelayed(afterSent, RESULT_WAIT_MS)
+            }
+        }
+
+        fun onPartial(text: String) {
+            partial = text.trim()
+        }
+
+        fun onEnded() {
+            handler.removeCallbacks(afterEnded)
+            handler.postDelayed(afterEnded, FINAL_WAIT_MS)
+        }
+
+        fun onError(name: String) {
+            // 말이 없는 구간(TIMEOUT 등)이면 그 구간은 건너뛰고 남은 소리를 이어서 넣는다.
+            onFinal(partial, problem = name)
+        }
+
+        fun onFinal(text: String, problem: String? = null) {
+            if (finished || !listening) return
+            handler.removeCallbacks(afterEnded)
+            handler.removeCallbacks(afterSent)
+            listening = false
+            text.trim().takeIf { it.isNotEmpty() }?.let { texts += it }
+            partial = ""
+            when {
+                sentAll -> finish(problem)
+                requests >= MAX_REQUESTS -> finish("다시 시작 횟수 초과")
+                else -> request()
+            }
+        }
+
+        fun finish(problem: String?) {
+            if (finished) return
+            finished = true
+            stopped = true
+            listening = false
+            handler.removeCallbacks(giveUp)
+            handler.removeCallbacks(afterEnded)
+            handler.removeCallbacks(afterSent)
+            runCatching { engine.stop() }
+            if (partial.isNotEmpty()) texts += partial
+            val text = texts.joinToString(" ").trim()
+            transcription = null
+            EventLog.add("목소리", "한마디를 글자로 바꿨어요 (${text.length}자, 인식 ${requests}번${problem?.let { " · $it" } ?: ""})")
+            done(text)
+            queued.removeFirstOrNull()?.let { (next, nextDone) -> transcribe(next, nextDone) }
+        }
+    }
+
     companion object {
         private const val RESTART_DELAY_MS = 200L
         /** 이만큼 듣는 동안 엔진이 한 번도 응답하지 않으면(준비됨·소리 크기조차) 쓸 수 없는 엔진으로 본다. */
         private const val SILENT_SERVICE_MS = 3_000L
+
+        // 한마디 글자로 바꾸기: 16kHz·16비트·모노에서 0.1초 = 3,200바이트
+        private const val CHUNK_BYTES = 3_200
+        private const val CHUNK_MS = 100L
+        private const val BYTES_PER_MS = 32
+        private const val IDLE_POLL_MS = 20L
+        private const val MAX_IDLE_MS = 3_000L
+        private const val FINAL_WAIT_MS = 1_500L
+        private const val RESULT_WAIT_MS = 5_000L
+        private const val TRANSCRIBE_EXTRA_MS = 20_000L
+        private const val MAX_REQUESTS = 12
     }
 }

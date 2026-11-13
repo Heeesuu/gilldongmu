@@ -70,7 +70,7 @@ func uploadBody(t *testing.T, audioType, meta string) (*bytes.Buffer, string) {
 	return &buf, w.FormDataContentType()
 }
 
-const validMeta = `{"recorded_at":"2026-11-07T23:50:00Z","lat":37.5672,"lon":126.979,"heading":45,"speed_kmh":32.5,"duration_ms":6400}`
+const validMeta = `{"recorded_at":"2026-11-07T23:50:00Z","lat":37.5672,"lon":126.979,"heading":45,"speed_kmh":32.5,"duration_ms":6400,"transcript":"다들 오늘도 힘내세요"}`
 
 func errorCode(t *testing.T, data []byte) string {
 	t.Helper()
@@ -117,7 +117,7 @@ func TestUploadRejectsWrongInput(t *testing.T) {
 func TestUploadWithoutHeading(t *testing.T) {
 	api, env := newAPI(t)
 
-	body, ct := uploadBody(t, "audio/ogg", `{"recorded_at":"2026-11-07T23:50:00Z","lat":37.5672,"lon":126.979,"speed_kmh":0,"duration_ms":6400}`)
+	body, ct := uploadBody(t, "audio/ogg", `{"recorded_at":"2026-11-07T23:50:00Z","lat":37.5672,"lon":126.979,"speed_kmh":0,"duration_ms":6400,"transcript":"다들 오늘도 힘내세요"}`)
 	resp, data := api.do("POST", "/v1/messages", author, body, ct)
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("heading 없이도 202여야 합니다: %d %s", resp.StatusCode, data)
@@ -245,7 +245,7 @@ func TestProfileEndpoints(t *testing.T) {
 // 찾기 응답에 녹음 시각·와이퍼·전조등·들은 수가 실린다(카드의 작은 표시에 씀).
 func TestNearbyCarriesContext(t *testing.T) {
 	api, env := newAPI(t)
-	body, ct := uploadBody(t, "audio/ogg", `{"recorded_at":"2026-11-07T23:50:00Z","lat":37.5672,"lon":126.979,"heading":45,"speed_kmh":30,"duration_ms":6400,"wiper_on":true}`)
+	body, ct := uploadBody(t, "audio/ogg", `{"recorded_at":"2026-11-07T23:50:00Z","lat":37.5672,"lon":126.979,"heading":45,"speed_kmh":30,"duration_ms":6400,"wiper_on":true,"transcript":"다들 오늘도 힘내세요"}`)
 	resp, data := api.do("POST", "/v1/messages", author, body, ct)
 	var uploaded struct{ ID string }
 	_ = json.Unmarshal(data, &uploaded)

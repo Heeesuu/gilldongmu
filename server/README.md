@@ -22,7 +22,6 @@ DEV_AUTO_APPROVE=true go run ./cmd/server
 | `SQLITE_PATH` | `gildongmu-dev.db` | |
 | `ANTHROPIC_API_KEY` | (없음) | 없으면 LLM 판정이 실패해 한마디가 보류(hold)됩니다 |
 | `JUDGE_MODEL` | `claude-haiku-5-5` | 검수에 쓸 Claude 모델 |
-| `STT_PROVIDER` | (없음) | `google`이면 Google Speech-to-Text로 음성을 글자로 바꿉니다(인증은 ADC, Cloud Run에서는 서비스 계정). 없으면 STT가 실패해 한마디가 보류됩니다 |
 | `DEV_AUTO_APPROVE` | `false` | 위 설명 참고 |
 
 키는 셸이나 배포 환경 변수로만 넣고, 파일로 저장소에 올리지 않습니다. 배포는 [../docs/deploy.md](../docs/deploy.md)를 따릅니다(`Dockerfile`, Cloud Run + Neon).
@@ -35,7 +34,7 @@ internal/handler  입출력(HTTP): 요청 해석, 계약서 모양의 응답·�
 internal/usecase  비즈니스 로직: 앞쪽 한마디 고르기, 고마워요, 검수 파이프라인
 internal/repository  DB(GORM): 저장·조회, 트랜잭션(UnitOfWork)
 internal/domain   한마디·단계·종류·유효기간 규칙, 칸·각도 계산
-internal/moderation  외부 연동: Claude 판정, Google STT, 비속어 사전, 미설정용 자리 표시자
+internal/moderation  외부 연동: Claude 판정, 비속어 사전, 미설정용 자리 표시자
 internal/testsupport 테스트용 메모리 DB와 가짜 STT·판정기
 ```
 
@@ -51,5 +50,5 @@ go build ./... && go vet ./... && go test ./...
 
 ## 아직 남은 것
 
-- 실제 배포(팀이 docs/deploy.md대로 실행)와 배포 서버에서의 STT·판정 확인
+- 검수용 글자는 앱이 차 안 음성 인식(Pleos SpeechToText SDK)으로 만들어 `meta.transcript`로 올립니다. 서버는 음성을 외부 음성 인식 서비스로 보내지 않습니다
 - 2차: 위치 옮기기, 신고, 와이퍼·전조등으로 순서 바꾸기

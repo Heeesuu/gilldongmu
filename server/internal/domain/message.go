@@ -47,6 +47,8 @@ const (
 	MaxAudioBytes    = 1 << 20
 	DailyUploadLimit = 20
 	AudioMimeOgg     = "audio/ogg"
+	// MaxTranscriptRunes는 앱이 보내는 글자의 최대 길이다. 15초 말은 많아야 100자 남짓이다.
+	MaxTranscriptRunes = 500
 )
 
 // Message는 길 위에 남긴 한마디다. 작성자가 지우면 음성과 글자까지 바로 지운다(하드 삭제).

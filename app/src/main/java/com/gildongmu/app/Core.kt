@@ -42,7 +42,12 @@ class Core(private val context: Context) : GleoActions.Target {
         voiceOn = { settings.voiceAnswer && hasMic() },
         nickname = { settings.profile?.nickname },
     )
-    val record: RecordController = RecordController(context, api, vehicle, currentDrive = { tracker.latest }) { id -> myMessages.track(id) }
+    val record: RecordController = RecordController(
+        context, api, vehicle,
+        currentDrive = { tracker.latest },
+        // 검수용 글자는 차 안 음성 인식으로 만든다. 대답을 듣는 엔진과 같은 엔진이라 GuideController가 맡는다.
+        transcribe = { file, done -> guide.transcribe(file, done) },
+    ) { id -> myMessages.track(id) }
     val tracker = DriveTracker(context) {
         guide.onDrive(it)
         record.onDrive(it)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,7 +121,7 @@ func TestThanksTurnsIntoFlower(t *testing.T) {
 
 func TestProfanityFilter(t *testing.T) {
 	env := ts.NewEnv(t)
-	env.STT.Text = "씨발 여기 또 막히네"
+	env.Transcript = "씨발 여기 또 막히네"
 	m := env.UploadAndModerate(t, author)
 
 	if m.Review != domain.ReviewProfanity {
@@ -136,10 +137,10 @@ func TestProfanityFilter(t *testing.T) {
 
 func TestModerationFailuresAreHeld(t *testing.T) {
 	cases := map[string]func(env *ts.Env){
-		"음성 변환 실패": func(env *ts.Env) { env.STT.Err = ts.ErrFake },
-		"빈 음성":     func(env *ts.Env) { env.STT.Text = "  " },
-		"LLM 실패":   func(env *ts.Env) { env.Judge.Err = ts.ErrFake },
-		"홍보":       func(env *ts.Env) { env.Judge.Result.Promo = true },
+		"글자 없음(차 안 음성 인식 결과 없음)": func(env *ts.Env) { env.Transcript = "" },
+		"빈칸뿐인 글자":                func(env *ts.Env) { env.Transcript = "  " },
+		"LLM 실패":                 func(env *ts.Env) { env.Judge.Err = ts.ErrFake },
+		"홍보":                     func(env *ts.Env) { env.Judge.Result.Promo = true },
 	}
 	for name, setup := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -226,6 +227,7 @@ func TestUploadValidation(t *testing.T) {
 		"15초 초과": func(in *usecase.UploadInput) { in.DurationMs = 15_001 },
 		"방향 범위":  func(in *usecase.UploadInput) { in.Heading = ptr(360.0) },
 		"위도 범위":  func(in *usecase.UploadInput) { in.Lat = 91 },
+		"글자 길이":  func(in *usecase.UploadInput) { in.Transcript = strings.Repeat("가", domain.MaxTranscriptRunes+1) },
 	}
 	for name, mutate := range cases {
 		in := base

@@ -9,6 +9,7 @@ import com.gildongmu.app.data.ServerApi
 import com.gildongmu.app.data.UploadMeta
 import com.gildongmu.app.drive.DriveState
 import com.gildongmu.app.drive.VehicleSignals
+import java.io.File
 import java.time.Instant
 import java.util.Locale
 
@@ -26,6 +27,8 @@ class RecordController(
     private val currentDrive: () -> DriveState?,
     private val lateHeading: LateHeading = LateHeading(),
     private val clock: () -> Long = SystemClock::elapsedRealtime,
+    // 녹음 파일을 차 안 음성 인식으로 글자로 바꾼다(검수용). 서버는 이 글자로 검수하고, 음성을 외부 음성 인식 서비스로 보내지 않는다.
+    private val transcribe: (File, (String) -> Unit) -> Unit = { _, done -> done("") },
     private val onUploaded: (id: String) -> Unit,
 ) {
     enum class Phase { IDLE, RECORDING }
@@ -162,6 +165,11 @@ class RecordController(
     }
 
     private fun upload(begun: Start, recording: VoiceRecorder.Recording, heading: Double?) {
+        status = "말을 글자로 바꾸는 중이에요."
+        transcribe(recording.file) { transcript -> send(begun, recording, heading, transcript) }
+    }
+
+    private fun send(begun: Start, recording: VoiceRecorder.Recording, heading: Double?, transcript: String) {
         status = "올리는 중이에요."
         val meta = UploadMeta(
             recordedAt = begun.recordedAt,
@@ -172,6 +180,7 @@ class RecordController(
             durationMs = recording.durationMs,
             wiperOn = begun.wiperOn,
             headlightOn = begun.headlightOn,
+            transcript = transcript,
         )
         api.upload(recording.file, meta) { result ->
             // MVP는 실패해도 다시 보내지 않는다. 녹음 파일은 어느 쪽이든 지운다.

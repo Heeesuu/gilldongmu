@@ -76,6 +76,7 @@ func (h *MessageHandler) upload(w http.ResponseWriter, r *http.Request) {
 		DurationMs:  *meta.DurationMs,
 		WiperOn:     meta.WiperOn,
 		HeadlightOn: meta.HeadlightOn,
+		Transcript:  meta.Transcript,
 	})
 	if err != nil {
 		writeError(w, err)

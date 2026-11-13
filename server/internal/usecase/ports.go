@@ -52,11 +52,6 @@ type ReviewOutcome struct {
 	ExpiresAt  *time.Time
 }
 
-// SpeechToText는 음성을 글자로 바꾼다. 배포에서는 Google Speech-to-Text(moderation.GoogleSTT)를 쓴다.
-type SpeechToText interface {
-	Transcribe(ctx context.Context, audio []byte, mime string) (string, error)
-}
-
 // Judgement는 LLM 판정 결과다.
 type Judgement struct {
 	Grade  domain.Review // clean, profanity, hold, blocked 중 하나
