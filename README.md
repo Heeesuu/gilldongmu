@@ -33,6 +33,7 @@
 | 항목 | 값 |
 |---|---|
 | 에뮬레이터 | Pleos Connect v2.1.0 (Android 14, API 34), 운전자 사용자(user 10) |
+| 화면 규격 | 2560×1440 가로, 160dpi (에뮬레이터 기본값). 앱은 오른쪽 앱 칸에 뜹니다 |
 | 확인한 컴퓨터 | Apple Silicon Mac. 에뮬레이터는 `-feature -Vulkan`을 붙여 켜야 부팅 직후 멈추지 않았습니다 |
 | 앱 | Kotlin, minSdk 28, targetSdk 34, compileSdk 37 (AGP 9.5, Gradle 9.6) |
 | Pleos SDK | Vehicle 2.3.2, NaviHelper 3.0.5, TextToSpeech 3.3.1, SpeechToText 3.3.1 (Playground 저장소, 로그인 불필요) |
