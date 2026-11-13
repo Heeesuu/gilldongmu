@@ -71,7 +71,7 @@ func (h *MessageHandler) upload(w http.ResponseWriter, r *http.Request) {
 		RecordedAt:  *meta.RecordedAt,
 		Lat:         *meta.Lat,
 		Lon:         *meta.Lon,
-		Heading:     *meta.Heading,
+		Heading:     meta.Heading,
 		SpeedKmh:    *meta.SpeedKmh,
 		DurationMs:  *meta.DurationMs,
 		WiperOn:     meta.WiperOn,

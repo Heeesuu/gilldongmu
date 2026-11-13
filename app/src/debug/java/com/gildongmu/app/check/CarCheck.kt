@@ -1,4 +1,4 @@
-package com.gildongmu.app
+package com.gildongmu.app.check
 
 import android.car.Car
 import android.car.VehiclePropertyIds
@@ -7,6 +7,7 @@ import android.car.drivingstate.CarUxRestrictionsManager
 import android.car.hardware.CarPropertyValue
 import android.car.hardware.property.CarPropertyManager
 import android.content.Context
+import com.gildongmu.app.EventLog
 import java.util.Locale
 
 /**

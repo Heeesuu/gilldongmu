@@ -31,7 +31,7 @@ func Open(databaseURL, sqlitePath string) (*gorm.DB, string, error) {
 
 // Migrate는 테이블을 만들거나 컬럼을 추가한다. 운영 DB에서는 팀이 직접 실행 여부를 정한다.
 func Migrate(db *gorm.DB) error {
-	if err := db.AutoMigrate(&domain.Message{}, &domain.Thanks{}, &domain.Listen{}); err != nil {
+	if err := db.AutoMigrate(&domain.Message{}, &domain.Thanks{}, &domain.Listen{}, &domain.Profile{}); err != nil {
 		return fmt.Errorf("테이블 마이그레이션 실패: %w", err)
 	}
 	return nil

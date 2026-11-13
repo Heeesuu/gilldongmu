@@ -1,0 +1,53 @@
+{
+  "packageName": "com.gildongmu.app",
+  "appDescription": "Gildongmu lets drivers hear short voice messages that other drivers left on the road ahead, and leave their own for drivers heading the same way.",
+  "version": "0.1.0",
+  "invokeWord": "길동무",
+  "actionCalls": [
+    {
+      "type": "function",
+      "function": {
+        "name": "CONTROL_ROAD_MESSAGES",
+        "description": "Listens to, skips, or stops the voice messages left on the road ahead.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "What to do with the road messages: listen to them, skip to the next one, or stop listening.",
+              "enum": ["listen", "skip", "stop"]
+            }
+          },
+          "required": ["command"]
+        },
+        "component": "service"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "THANK_ROAD_MESSAGE",
+        "description": "Sends thanks to the driver who left the road message that was just played.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "component": "service"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "RECORD_ROAD_MESSAGE",
+        "description": "Starts or finishes recording a short voice message at the current location for drivers heading the same way.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "component": "service"
+      }
+    }
+  ]
+}

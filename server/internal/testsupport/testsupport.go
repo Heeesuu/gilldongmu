@@ -32,6 +32,7 @@ type Env struct {
 	Repo       *repository.MessageRepository
 	Messages   *usecase.MessageUsecase
 	Moderation *usecase.ModerationUsecase
+	Profiles   *usecase.ProfileUsecase
 	Queue      *FakeQueue
 	Clock      *FakeClock
 	STT        *FakeSTT
@@ -72,11 +73,23 @@ func NewEnv(t *testing.T) *Env {
 	}
 	env.Messages = usecase.NewMessageUsecase(repo, repository.NewUnitOfWork(db), env.Queue, env.Clock.Now, newID)
 	env.Moderation = usecase.NewModerationUsecase(repo, env.STT, env.Judge, moderation.NewDictionaryFrom("씨발\n"), false)
+	env.Profiles = usecase.NewProfileUsecase(repository.NewProfileRepository(db), moderation.NewDictionaryFrom("씨발\n"), env.Clock.Now)
 	return env
 }
 
 // UploadAt은 녹음 기본값으로 한마디를 올린다.
 func (e *Env) UploadAt(t *testing.T, deviceID string, lat, lon, heading float64) *domain.Message {
+	t.Helper()
+	return e.upload(t, deviceID, lat, lon, &heading)
+}
+
+// UploadWithoutHeading은 방향을 모른 채 한마디를 올린다.
+func (e *Env) UploadWithoutHeading(t *testing.T, deviceID string, lat, lon float64) *domain.Message {
+	t.Helper()
+	return e.upload(t, deviceID, lat, lon, nil)
+}
+
+func (e *Env) upload(t *testing.T, deviceID string, lat, lon float64, heading *float64) *domain.Message {
 	t.Helper()
 	m, err := e.Messages.Upload(context.Background(), usecase.UploadInput{
 		DeviceID:   deviceID,

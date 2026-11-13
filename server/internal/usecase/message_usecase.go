@@ -41,7 +41,7 @@ type UploadInput struct {
 	RecordedAt  time.Time
 	Lat         float64
 	Lon         float64
-	Heading     float64
+	Heading     *float64 // nil이면 방향을 모른다
 	SpeedKmh    float64
 	DurationMs  int
 	WiperOn     *bool
@@ -61,17 +61,27 @@ func (in UploadInput) validate() error {
 	case in.RecordedAt.IsZero():
 		return domain.Invalid("recorded_at이 필요합니다.")
 	}
-	return validatePosition(in.Lat, in.Lon, in.Heading, in.SpeedKmh)
+	if in.Heading != nil {
+		if err := validateHeading(*in.Heading); err != nil {
+			return err
+		}
+	}
+	return validatePosition(in.Lat, in.Lon, in.SpeedKmh)
 }
 
-func validatePosition(lat, lon, heading, speed float64) error {
+func validatePosition(lat, lon, speed float64) error {
 	switch {
 	case lat < -90 || lat > 90 || lon < -180 || lon > 180:
 		return domain.Invalid("위도·경도 범위를 벗어났습니다.")
-	case heading < 0 || heading >= 360:
-		return domain.Invalid("heading은 0 이상 360 미만이어야 합니다.")
 	case speed < 0:
 		return domain.Invalid("speed_kmh는 0 이상이어야 합니다.")
+	}
+	return nil
+}
+
+func validateHeading(heading float64) error {
+	if heading < 0 || heading >= 360 {
+		return domain.Invalid("heading은 0 이상 360 미만이어야 합니다.")
 	}
 	return nil
 }
@@ -141,7 +151,10 @@ type NearbyResult struct {
 
 // Nearby는 같은 방향·앞쪽·아직 듣지 않은 한마디를 순서대로 돌려준다.
 func (u *MessageUsecase) Nearby(ctx context.Context, in NearbyInput) (NearbyResult, error) {
-	if err := validatePosition(in.Lat, in.Lon, in.Heading, in.SpeedKmh); err != nil {
+	if err := validateHeading(in.Heading); err != nil {
+		return NearbyResult{}, err
+	}
+	if err := validatePosition(in.Lat, in.Lon, in.SpeedKmh); err != nil {
 		return NearbyResult{}, err
 	}
 	limit := in.Limit
@@ -171,7 +184,8 @@ func (u *MessageUsecase) Nearby(ctx context.Context, in NearbyInput) (NearbyResu
 		if listened[m.ID] || (in.FilterOn && m.Review == domain.ReviewProfanity) {
 			continue
 		}
-		if domain.AngleDiff(m.Heading, in.Heading) > sameDirectionMaxDiff {
+		// 방향을 모르는 한마디는 같은 방향 조건을 건너뛴다. 앞쪽 조건은 듣는 차의 방향으로 확인한다.
+		if m.Heading != nil && domain.AngleDiff(*m.Heading, in.Heading) > sameDirectionMaxDiff {
 			continue
 		}
 		distance := domain.DistanceMeters(in.Lat, in.Lon, m.Lat, m.Lon)
