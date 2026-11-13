@@ -39,6 +39,15 @@ MESSAGES = [
     ("광장-출근길", "Grandma (한국어(한국))", "광화문 앞을 지날 때면 늘 마음이 든든해져요. 오늘도 좋은 길 되세요.", 37.5732, 0.0, 0),
     ("남쪽-퇴근길", "Grandpa (한국어(한국))", "퇴근길 다들 고생 많으셨어요. 조심히 들어가세요.", 37.5690, 180.0, 0),
 ]
+# 전체 기능 둘러보기 영상(tools/demo/tour.sh)용: 같은 운전자가 북쪽으로 가며 장면마다 다른 곳의 한마디를 만난다.
+TOUR = MESSAGES[:3] + [
+    ("내비장면", "Eddy (한국어(한국))", "이 앞 사거리에서 오른쪽으로 가면 경복궁 돌담길이 정말 예뻐요.", 37.5765, 0.0, 0),
+    ("화면밖장면", "Yuna", "오늘도 다들 무사히 들어가세요. 내일 또 이 길에서 만나요.", 37.5800, 0.0, 0),
+]
+if os.environ.get("GILDONGMU_SEED_SET") == "tour":
+    MESSAGES = TOUR
+# 1이면 한마디 소리를 같은 길이의 무음으로 바꿔 심는다(나중에 사람 목소리를 입히는 영상용). ffmpeg가 필요하다.
+SILENT = os.environ.get("GILDONGMU_SEED_SILENT") == "1"
 LONG_LIVED = {"greeting", "place"}
 
 
@@ -116,6 +125,13 @@ def main():
                 continue
             audio_path = os.path.join(OUT, f"{name}.ogg")
             subprocess.run([os.path.join(HERE, "make_voice.sh"), voice, text, audio_path], check=True)
+            if SILENT:
+                seconds = ogg_duration_ms(audio_path) / 1000
+                silent_path = os.path.join(OUT, f"{name}.silent.ogg")
+                subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+                                "-i", "anullsrc=r=48000:cl=mono", "-t", f"{seconds:.2f}",
+                                "-c:a", "libopus", "-b:a", "24k", silent_path], check=True)
+                audio_path = silent_path
             device = str(uuid.uuid4())
             meta = {
                 "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
